@@ -1,0 +1,101 @@
+# LiteLLM Proxy Configuration
+# This replaces OpenRouter with direct provider API calls
+#
+# Usage:
+#   litellm --config litellm_config.yaml --port 4000
+#
+# Or with pip installed litellm:
+#   pip install 'litellm[proxy]'
+#   litellm --config litellm_config.yaml --port 4000
+
+model_list:
+  # OpenAI Models
+  - model_name: openai/gpt-4.1
+    litellm_params:
+      model: gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: openai/gpt-4o-mini
+    litellm_params:
+      model: gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Anthropic Models
+  - model_name: anthropic/claude-sonnet-4.5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      max_tokens: 8192
+
+  - model_name: anthropic/claude-sonnet-4
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: anthropic/claude-3.5-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: anthropic/claude-opus-4
+    litellm_params:
+      model: anthropic/claude-opus-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: anthropic/claude-opus-4.5
+    litellm_params:
+      model: anthropic/claude-opus-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      max_tokens: 16384
+
+  # Google Models
+  - model_name: google/gemini-3-pro
+    litellm_params:
+      model: gemini/gemini-3-pro-preview
+      api_key: os.environ/GOOGLE_API_KEY
+
+  - model_name: google/gemini-2.5-pro
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/GOOGLE_API_KEY
+
+  - model_name: google/gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GOOGLE_API_KEY
+
+  # Moonshot/Kimi Models
+  # Uses OpenAI-compatible API at api.moonshot.ai
+  # Note: Kimi K2 Thinking is a reasoning model that needs extended timeout
+  - model_name: moonshot/kimi-k2-thinking
+    litellm_params:
+      model: openai/kimi-k2-thinking
+      api_key: os.environ/MOONSHOT_API_KEY
+      api_base: https://api.moonshot.ai/v1
+      timeout: 300  # Extended timeout for reasoning model (5 minutes)
+
+  # xAI Models
+  - model_name: x-ai/grok-4.1
+    litellm_params:
+      model: xai/grok-4-0709
+      api_key: os.environ/XAI_API_KEY
+
+  - model_name: x-ai/grok-2
+    litellm_params:
+      model: xai/grok-2-latest
+      api_key: os.environ/XAI_API_KEY
+
+litellm_settings:
+  # Drop unmapped params to avoid errors with provider-specific params
+  drop_params: true
+  # Set reasonable timeouts (increased for reasoning models)
+  request_timeout: 300
+
+general_settings:
+  # Master key for the proxy (optional, can be any string)
+  master_key: sk-litellm-master-key

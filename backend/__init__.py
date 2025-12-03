@@ -1,0 +1,1 @@
+"""AI Ministry backend package."""

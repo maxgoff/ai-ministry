@@ -1,0 +1,184 @@
+.model-config {
+  border-bottom: 1px solid #e0e0e0;
+  background: #fff;
+}
+
+.model-config-header {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.model-config-header:hover {
+  background: #f5f5f5;
+}
+
+.collapse-icon {
+  font-size: 10px;
+  margin-right: 8px;
+  color: #666;
+}
+
+.model-config-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  color: #333;
+  flex: 1;
+}
+
+.model-count {
+  font-size: 12px;
+  color: #666;
+  background: #e8f0fe;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.model-config-loading {
+  padding: 16px;
+  text-align: center;
+  color: #999;
+  font-size: 13px;
+}
+
+.model-config-content {
+  padding: 0 16px 16px;
+}
+
+.health-check-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.refresh-health-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  background: #f0f0f0;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.refresh-health-btn:hover:not(:disabled) {
+  background: #e0e0e0;
+}
+
+.refresh-health-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.health-summary {
+  font-size: 12px;
+  color: #666;
+}
+
+.models-list {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.model-item {
+  padding: 8px 12px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.model-item:last-child {
+  border-bottom: none;
+}
+
+.model-item.selected {
+  background: #f8f9ff;
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.model-checkbox input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.model-name {
+  color: #333;
+}
+
+.model-name.unhealthy {
+  color: #999;
+  text-decoration: line-through;
+}
+
+.health-indicator {
+  font-size: 8px;
+  margin-left: 4px;
+}
+
+.health-indicator.healthy {
+  color: #4caf50;
+}
+
+.health-indicator.unhealthy {
+  color: #f44336;
+}
+
+.persona-select {
+  font-size: 11px;
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+  min-width: 120px;
+  cursor: pointer;
+}
+
+.prime-minister-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.pm-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: #666;
+  margin-bottom: 6px;
+}
+
+.pm-select {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.pm-select:focus,
+.persona-select:focus {
+  outline: none;
+  border-color: #4a90e2;
+}
