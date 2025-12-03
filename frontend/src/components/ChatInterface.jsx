@@ -113,7 +113,7 @@ export default function ChatInterface({
         {isLoading && (
           <div className="loading-indicator">
             <div className="spinner"></div>
-            <span>Consulting the council...</span>
+            <span>Consulting the ministry...</span>
           </div>
         )}
 
