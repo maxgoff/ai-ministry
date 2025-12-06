@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { api } from '../api';
 import ModelConfig from './ModelConfig';
 import './Sidebar.css';
 
@@ -9,6 +10,35 @@ export default function Sidebar({
   onNewConversation,
   onMinistryConfigChange,
 }) {
+  const [exporting, setExporting] = useState(null);
+
+  const handleExportMarkdown = async () => {
+    if (!currentConversationId) return;
+    setExporting('md');
+    try {
+      await api.exportMarkdown(currentConversationId);
+    } catch (error) {
+      alert('Export failed: ' + error.message);
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const handleExportPDF = async () => {
+    if (!currentConversationId) return;
+    setExporting('pdf');
+    try {
+      await api.exportPDF(currentConversationId);
+    } catch (error) {
+      alert('Export failed: ' + error.message);
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const currentConversation = conversations.find(c => c.id === currentConversationId);
+  const hasMessages = currentConversation?.message_count > 0;
+
   return (
     <div className="sidebar">
       <div className="sidebar-header">
@@ -17,6 +47,28 @@ export default function Sidebar({
           + New Conversation
         </button>
       </div>
+
+      {hasMessages && (
+        <div className="export-section">
+          <div className="export-header">Export Conversation</div>
+          <div className="export-buttons">
+            <button
+              className="export-btn"
+              onClick={handleExportMarkdown}
+              disabled={exporting !== null}
+            >
+              {exporting === 'md' ? 'Exporting...' : 'Markdown'}
+            </button>
+            <button
+              className="export-btn"
+              onClick={handleExportPDF}
+              disabled={exporting !== null}
+            >
+              {exporting === 'pdf' ? 'Exporting...' : 'PDF'}
+            </button>
+          </div>
+        </div>
+      )}
 
       <ModelConfig onConfigChange={onMinistryConfigChange} />
 

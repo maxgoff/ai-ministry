@@ -1,24 +1,48 @@
-"""Configuration for the AI Ministry."""
+"""Configuration for the AI Ministry.
+
+Configuration is loaded from ministry_config.yaml if present,
+otherwise falls back to hardcoded defaults.
+"""
 
 import os
+from pathlib import Path
+from typing import Any, Dict, List
+
+import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# Find config file (check project root)
+CONFIG_PATH = Path(__file__).parent.parent / "ministry_config.yaml"
+
+
+def _load_yaml_config() -> Dict[str, Any]:
+    """Load configuration from YAML file if it exists."""
+    if CONFIG_PATH.exists():
+        with open(CONFIG_PATH, "r") as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
+
+# Load YAML config once at module import
+_yaml_config = _load_yaml_config()
+
 # LLM API Configuration
 # Supports both LiteLLM (local) and OpenRouter (cloud)
-# Set LLM_API_URL to switch between them:
-#   - LiteLLM (local):  http://localhost:4000/chat/completions
-#   - OpenRouter:       https://openrouter.ai/api/v1/chat/completions
-LLM_API_URL = os.getenv("LLM_API_URL", "http://localhost:4000/chat/completions")
+_api_config = _yaml_config.get("api", {})
+LLM_API_URL = os.getenv(
+    "LLM_API_URL",
+    _api_config.get("url", "http://localhost:4000/chat/completions")
+)
 LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-litellm-master-key")
 
 # Legacy OpenRouter support (fallback if LLM_API_KEY not set)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or LLM_API_KEY
 OPENROUTER_API_URL = LLM_API_URL
 
-# All available models (for health checking and selection)
-AVAILABLE_MODELS = [
+# Hardcoded defaults (used if YAML not present)
+_DEFAULT_AVAILABLE_MODELS = [
     "openai/gpt-4.1",
     "openai/gpt-4o",
     "openai/gpt-4o-mini",
@@ -35,8 +59,7 @@ AVAILABLE_MODELS = [
     "x-ai/grok-2",
 ]
 
-# Default ministry members - list of model identifiers (provider/model format)
-DEFAULT_MINISTRY_MODELS = [
+_DEFAULT_MINISTRY_MODELS = [
     "openai/gpt-4.1",
     "google/gemini-3-pro",
     "anthropic/claude-opus-4.5",
@@ -44,21 +67,7 @@ DEFAULT_MINISTRY_MODELS = [
     "x-ai/grok-4.1",
 ]
 
-# Legacy alias for backward compatibility
-COUNCIL_MODELS = DEFAULT_MINISTRY_MODELS
-
-# Default Prime Minister model - synthesizes final response
-DEFAULT_PRIME_MINISTER = "google/gemini-3-pro"
-
-# Legacy alias for backward compatibility
-CHAIRMAN_MODEL = DEFAULT_PRIME_MINISTER
-
-# Data directory for conversation storage
-DATA_DIR = "data/conversations"
-
-# Available personas for role cycling technique
-# Each persona provides a unique analytical lens to maximize perspective diversity
-AVAILABLE_PERSONAS = {
+_DEFAULT_PERSONAS = {
     "analytical_strategist": {
         "name": "Analytical Strategist",
         "instruction": "You approach problems with structured analysis, identifying trade-offs, practical implementation paths, and clear decision frameworks."
@@ -89,8 +98,7 @@ AVAILABLE_PERSONAS = {
     },
 }
 
-# Default model-to-persona mapping
-DEFAULT_MODEL_PERSONAS = {
+_DEFAULT_MODEL_PERSONA_MAP = {
     "openai/gpt-4.1": "analytical_strategist",
     "google/gemini-3-pro": "systems_thinker",
     "anthropic/claude-opus-4.5": "principled_reasoner",
@@ -98,8 +106,51 @@ DEFAULT_MODEL_PERSONAS = {
     "x-ai/grok-4.1": "unconventional_thinker",
 }
 
+# Load from YAML or use defaults
+AVAILABLE_MODELS: List[str] = _yaml_config.get("available_models", _DEFAULT_AVAILABLE_MODELS)
+AVAILABLE_PERSONAS: Dict[str, Dict[str, str]] = _yaml_config.get("personas", _DEFAULT_PERSONAS)
+
+
+# Parse ministry members from YAML format
+def _parse_ministry_members() -> tuple[List[str], Dict[str, str]]:
+    """Parse ministry_members from YAML into model list and persona mapping."""
+    yaml_members = _yaml_config.get("ministry_members", [])
+    if not yaml_members:
+        return _DEFAULT_MINISTRY_MODELS, _DEFAULT_MODEL_PERSONA_MAP
+
+    models = []
+    persona_map = {}
+    for member in yaml_members:
+        model_id = member.get("id") if isinstance(member, dict) else member
+        models.append(model_id)
+        if isinstance(member, dict) and "persona" in member:
+            persona_map[model_id] = member["persona"]
+
+    return models, persona_map
+
+
+DEFAULT_MINISTRY_MODELS, DEFAULT_MODEL_PERSONAS = _parse_ministry_members()
+
+# Legacy alias for backward compatibility
+COUNCIL_MODELS = DEFAULT_MINISTRY_MODELS
+
+# Prime Minister model - synthesizes final response
+DEFAULT_PRIME_MINISTER = _yaml_config.get("prime_minister", "google/gemini-3-pro")
+
+# Legacy alias for backward compatibility
+CHAIRMAN_MODEL = DEFAULT_PRIME_MINISTER
+
+# Data directory for conversation storage
+DATA_DIR = "data/conversations"
+
 # Legacy MODEL_PERSONAS format for backward compatibility
 MODEL_PERSONAS = {
-    model: AVAILABLE_PERSONAS[persona_id]
+    model: AVAILABLE_PERSONAS.get(persona_id, _DEFAULT_PERSONAS.get(persona_id, {}))
     for model, persona_id in DEFAULT_MODEL_PERSONAS.items()
 }
+
+# Log config source on import
+if CONFIG_PATH.exists():
+    print(f"[Config] Loaded from {CONFIG_PATH}")
+else:
+    print("[Config] Using hardcoded defaults (no ministry_config.yaml found)")

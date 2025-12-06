@@ -2,12 +2,13 @@
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import uuid
 import json
 import asyncio
+from datetime import datetime
 
 from . import storage
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
@@ -282,6 +283,271 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             "Connection": "keep-alive",
         }
     )
+
+
+def _conversation_to_markdown(conversation: Dict[str, Any]) -> str:
+    """Convert a conversation to Markdown format."""
+    lines = []
+
+    # Header
+    lines.append(f"# {conversation['title']}")
+    lines.append("")
+    created = conversation.get('created_at', '')
+    if created:
+        try:
+            dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
+            lines.append(f"*Exported from AI Ministry on {dt.strftime('%B %d, %Y')}*")
+        except ValueError:
+            lines.append(f"*Created: {created}*")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    for msg in conversation.get('messages', []):
+        if msg['role'] == 'user':
+            lines.append("## User")
+            lines.append("")
+            lines.append(msg['content'])
+            lines.append("")
+
+        elif msg['role'] == 'assistant':
+            # Stage 1: Individual Responses
+            lines.append("## Ministry Responses")
+            lines.append("")
+            for response in msg.get('stage1', []):
+                model = response.get('model', 'Unknown')
+                content = response.get('response', '')
+                lines.append(f"### {model}")
+                lines.append("")
+                lines.append(content)
+                lines.append("")
+
+            # Stage 2: Rankings (summarized)
+            lines.append("## Peer Rankings")
+            lines.append("")
+            for ranking in msg.get('stage2', []):
+                model = ranking.get('model', 'Unknown')
+                parsed = ranking.get('parsed_ranking', [])
+                if parsed:
+                    lines.append(f"**{model}**: {' > '.join(parsed)}")
+            lines.append("")
+
+            # Stage 3: Final Synthesis
+            lines.append("## Prime Minister's Synthesis")
+            lines.append("")
+            stage3 = msg.get('stage3', {})
+            pm_model = stage3.get('model', 'Unknown')
+            synthesis = stage3.get('response', '')
+            lines.append(f"*Synthesized by {pm_model}*")
+            lines.append("")
+            lines.append(synthesis)
+            lines.append("")
+
+        lines.append("---")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@app.get("/api/conversations/{conversation_id}/export/markdown")
+async def export_conversation_markdown(conversation_id: str):
+    """Export a conversation as Markdown."""
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    markdown = _conversation_to_markdown(conversation)
+
+    # Generate filename from title
+    safe_title = "".join(c if c.isalnum() or c in ' -_' else '' for c in conversation['title'])
+    safe_title = safe_title.strip().replace(' ', '_')[:50] or 'conversation'
+    filename = f"{safe_title}.md"
+
+    return Response(
+        content=markdown,
+        media_type="text/markdown",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
+
+@app.get("/api/conversations/{conversation_id}/export/pdf")
+async def export_conversation_pdf(conversation_id: str):
+    """Export a conversation as PDF."""
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    try:
+        from fpdf import FPDF
+        import re
+
+        def normalize_text(text: str) -> str:
+            """Replace Unicode characters with ASCII equivalents for PDF."""
+            replacements = {
+                '"': '"', '"': '"', ''': "'", ''': "'",
+                '–': '-', '—': '-', '…': '...',
+                '•': '*', '→': '->', '←': '<-',
+                '≥': '>=', '≤': '<=', '≠': '!=',
+                '\u00a0': ' ',  # Non-breaking space
+            }
+            for old, new in replacements.items():
+                text = text.replace(old, new)
+            # Remove any remaining non-ASCII characters
+            return text.encode('ascii', 'ignore').decode('ascii')
+
+        class PDF(FPDF):
+            def header(self):
+                self.set_font('Helvetica', 'B', 10)
+                self.set_text_color(100, 100, 100)
+                self.cell(0, 10, 'AI Ministry Export', align='R')
+                self.ln(10)
+
+            def footer(self):
+                self.set_y(-15)
+                self.set_font('Helvetica', 'I', 8)
+                self.set_text_color(128, 128, 128)
+                self.cell(0, 10, f'Page {self.page_no()}', align='C')
+
+        pdf = PDF()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+
+        # Title
+        pdf.set_font('Helvetica', 'B', 20)
+        pdf.set_text_color(44, 62, 80)
+        pdf.multi_cell(0, 10, normalize_text(conversation['title']))
+        pdf.ln(5)
+
+        # Date
+        pdf.set_font('Helvetica', 'I', 10)
+        pdf.set_text_color(128, 128, 128)
+        created = conversation.get('created_at', '')
+        if created:
+            try:
+                dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                pdf.cell(0, 10, f"Exported on {dt.strftime('%B %d, %Y')}")
+            except ValueError:
+                pdf.cell(0, 10, f"Created: {created}")
+        pdf.ln(10)
+
+        # Horizontal line
+        pdf.set_draw_color(200, 200, 200)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(10)
+
+        for msg in conversation.get('messages', []):
+            if msg['role'] == 'user':
+                # User message
+                pdf.set_font('Helvetica', 'B', 14)
+                pdf.set_text_color(52, 73, 94)
+                pdf.cell(0, 10, 'User')
+                pdf.ln(8)
+
+                pdf.set_font('Helvetica', '', 11)
+                pdf.set_text_color(0, 0, 0)
+                # Clean markdown formatting for PDF
+                content = msg['content']
+                content = re.sub(r'\*\*(.+?)\*\*', r'\1', content)  # Remove bold
+                content = re.sub(r'\*(.+?)\*', r'\1', content)  # Remove italic
+                pdf.multi_cell(0, 6, normalize_text(content))
+                pdf.ln(10)
+
+            elif msg['role'] == 'assistant':
+                # Stage 1
+                pdf.set_font('Helvetica', 'B', 14)
+                pdf.set_text_color(52, 73, 94)
+                pdf.cell(0, 10, 'Ministry Responses')
+                pdf.ln(8)
+
+                for response in msg.get('stage1', []):
+                    model = response.get('model', 'Unknown')
+                    content = response.get('response', '')
+
+                    pdf.set_font('Helvetica', 'B', 12)
+                    pdf.set_text_color(74, 144, 226)
+                    pdf.cell(0, 8, model)
+                    pdf.ln(6)
+
+                    pdf.set_font('Helvetica', '', 10)
+                    pdf.set_text_color(0, 0, 0)
+                    # Clean and truncate content for PDF
+                    content = re.sub(r'\*\*(.+?)\*\*', r'\1', content)
+                    content = re.sub(r'\*(.+?)\*', r'\1', content)
+                    content = re.sub(r'```[\s\S]*?```', '[code block]', content)
+                    if len(content) > 2000:
+                        content = content[:2000] + '... [truncated]'
+                    pdf.multi_cell(0, 5, normalize_text(content))
+                    pdf.ln(8)
+
+                # Stage 2 Summary
+                pdf.set_font('Helvetica', 'B', 14)
+                pdf.set_text_color(52, 73, 94)
+                pdf.cell(0, 10, 'Peer Rankings')
+                pdf.ln(8)
+
+                pdf.set_font('Helvetica', '', 10)
+                pdf.set_text_color(0, 0, 0)
+                for ranking in msg.get('stage2', []):
+                    model = ranking.get('model', 'Unknown')
+                    parsed = ranking.get('parsed_ranking', [])
+                    if parsed:
+                        ranking_text = normalize_text(f"{model}: {' > '.join(parsed)}")
+                        # Use cell for single line, add line break manually
+                        pdf.cell(0, 6, ranking_text[:100])  # Truncate if too long
+                        pdf.ln(6)
+                pdf.ln(10)
+
+                # Stage 3
+                pdf.set_font('Helvetica', 'B', 14)
+                pdf.set_text_color(52, 73, 94)
+                pdf.cell(0, 10, "Prime Minister's Synthesis")
+                pdf.ln(8)
+
+                stage3 = msg.get('stage3', {})
+                pm_model = stage3.get('model', 'Unknown')
+                synthesis = stage3.get('response', '')
+
+                pdf.set_font('Helvetica', 'I', 10)
+                pdf.set_text_color(128, 128, 128)
+                pdf.cell(0, 6, f"Synthesized by {pm_model}")
+                pdf.ln(6)
+
+                pdf.set_font('Helvetica', '', 10)
+                pdf.set_text_color(0, 0, 0)
+                synthesis = re.sub(r'\*\*(.+?)\*\*', r'\1', synthesis)
+                synthesis = re.sub(r'\*(.+?)\*', r'\1', synthesis)
+                synthesis = re.sub(r'```[\s\S]*?```', '[code block]', synthesis)
+                pdf.multi_cell(0, 5, normalize_text(synthesis))
+                pdf.ln(10)
+
+            # Separator
+            pdf.set_draw_color(200, 200, 200)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+            pdf.ln(10)
+
+        # Generate PDF bytes
+        pdf_bytes = pdf.output()
+
+        # Generate filename
+        safe_title = "".join(c if c.isalnum() or c in ' -_' else '' for c in conversation['title'])
+        safe_title = safe_title.strip().replace(' ', '_')[:50] or 'conversation'
+        filename = f"{safe_title}.pdf"
+
+        return Response(
+            content=bytes(pdf_bytes),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="PDF export requires 'fpdf2' package. Install with: pip install fpdf2"
+        )
 
 
 if __name__ == "__main__":

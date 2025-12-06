@@ -1,0 +1,75 @@
+# AI Ministry Configuration
+# Edit this file to customize your ministry without touching Python code
+
+# API Configuration
+api:
+  # LiteLLM (local): http://localhost:4000/chat/completions
+  # OpenRouter (cloud): https://openrouter.ai/api/v1/chat/completions
+  url: "http://localhost:4000/chat/completions"
+  # Key is loaded from environment variable LLM_API_KEY or defaults to LiteLLM key
+  # key: "sk-litellm-master-key"
+
+# Prime Minister - synthesizes the final response from all ministry input
+prime_minister: "google/gemini-3-pro"
+
+# Ministry Members - models that deliberate on user queries
+# Each member can optionally have a persona assigned
+ministry_members:
+  - id: "openai/gpt-4.1"
+    persona: "analytical_strategist"
+  - id: "google/gemini-3-pro"
+    persona: "systems_thinker"
+  - id: "anthropic/claude-opus-4.5"
+    persona: "principled_reasoner"
+  - id: "moonshot/kimi-k2-thinking"
+    persona: "deep_analyst"
+  - id: "x-ai/grok-4.1"
+    persona: "unconventional_thinker"
+
+# Available Models (for health checks and model selection UI)
+available_models:
+  - "openai/gpt-4.1"
+  - "openai/gpt-4o"
+  - "openai/gpt-4o-mini"
+  - "google/gemini-3-pro"
+  - "google/gemini-2.5-pro"
+  - "google/gemini-2.5-flash"
+  - "anthropic/claude-opus-4.5"
+  - "anthropic/claude-sonnet-4.5"
+  - "anthropic/claude-sonnet-4"
+  - "anthropic/claude-3.5-sonnet"
+  - "anthropic/claude-opus-4"
+  - "moonshot/kimi-k2-thinking"
+  - "x-ai/grok-4.1"
+  - "x-ai/grok-2"
+
+# Personas - different analytical lenses for ministry members
+# Assign these to models via ministry_members above
+personas:
+  analytical_strategist:
+    name: "Analytical Strategist"
+    instruction: "You approach problems with structured analysis, identifying trade-offs, practical implementation paths, and clear decision frameworks."
+
+  systems_thinker:
+    name: "Systems Thinker"
+    instruction: "You focus on interconnections, edge cases, scalability considerations, and how solutions behave across different contexts and scales."
+
+  principled_reasoner:
+    name: "Principled Reasoner"
+    instruction: "You reason from first principles, considering ethical implications, nuanced consequences, and the deeper 'why' behind recommendations."
+
+  deep_analyst:
+    name: "Deep Analyst"
+    instruction: "You apply extended reasoning and thorough exploration, especially for complex or technical topics requiring careful step-by-step analysis."
+
+  unconventional_thinker:
+    name: "Unconventional Thinker"
+    instruction: "You bring fresh perspectives and challenge conventional wisdom, identifying overlooked angles and providing candid, direct assessments."
+
+  devil_advocate:
+    name: "Devil's Advocate"
+    instruction: "You challenge assumptions and highlight potential flaws, risks, and counterarguments to strengthen the overall analysis."
+
+  pragmatic_implementer:
+    name: "Pragmatic Implementer"
+    instruction: "You focus on practical execution, feasibility, resource requirements, and real-world constraints that affect implementation."

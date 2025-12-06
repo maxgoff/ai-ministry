@@ -140,4 +140,73 @@ export const api = {
       }
     }
   },
+
+  /**
+   * Export a conversation as Markdown.
+   * @param {string} conversationId - The conversation ID
+   * @returns {Promise<void>} - Triggers file download
+   */
+  async exportMarkdown(conversationId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/export/markdown`
+    );
+    if (!response.ok) {
+      throw new Error('Failed to export conversation');
+    }
+
+    // Get filename from Content-Disposition header
+    const contentDisposition = response.headers.get('Content-Disposition');
+    let filename = 'conversation.md';
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="(.+)"/);
+      if (match) filename = match[1];
+    }
+
+    // Download the file
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  },
+
+  /**
+   * Export a conversation as PDF.
+   * @param {string} conversationId - The conversation ID
+   * @returns {Promise<void>} - Triggers file download
+   */
+  async exportPDF(conversationId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/export/pdf`
+    );
+    if (!response.ok) {
+      if (response.status === 501) {
+        throw new Error('PDF export is not available. The server needs additional packages installed.');
+      }
+      throw new Error('Failed to export conversation');
+    }
+
+    // Get filename from Content-Disposition header
+    const contentDisposition = response.headers.get('Content-Disposition');
+    let filename = 'conversation.pdf';
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="(.+)"/);
+      if (match) filename = match[1];
+    }
+
+    // Download the file
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  },
 };
