@@ -35,7 +35,7 @@ LLM_API_URL = os.getenv(
     "LLM_API_URL",
     _api_config.get("url", "http://localhost:4000/chat/completions")
 )
-LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-litellm-master-key")
+LLM_API_KEY = os.getenv("LLM_API_KEY")
 
 # Legacy OpenRouter support (fallback if LLM_API_KEY not set)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or LLM_API_KEY
