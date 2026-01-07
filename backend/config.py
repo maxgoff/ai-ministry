@@ -6,12 +6,51 @@ otherwise falls back to hardcoded defaults.
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+class ConfigurationError(Exception):
+    """Raised when required configuration is missing or invalid."""
+
+    pass
+
+
+def _require_env_var(
+    var_name: str,
+    description: Optional[str] = None
+) -> str:
+    """
+    Validate that a required environment variable is set.
+
+    Args:
+        var_name: The name of the environment variable to check
+        description: Optional description of what this variable is for,
+                     used in error messaging
+
+    Returns:
+        The value of the environment variable
+
+    Raises:
+        ConfigurationError: If the environment variable is not set or is empty
+    """
+    value = os.getenv(var_name)
+
+    if value is None or value.strip() == "":
+        desc_text = f" ({description})" if description else ""
+        raise ConfigurationError(
+            f"Required environment variable '{var_name}'{desc_text} is not set.\n\n"
+            f"To fix this:\n"
+            f"  1. Create a .env file in the project root (copy from .env.example)\n"
+            f"  2. Set {var_name}=your_value in the .env file\n"
+            f"  3. Or set it as an environment variable: export {var_name}=your_value"
+        )
+
+    return value
 
 # Find config file (check project root)
 CONFIG_PATH = Path(__file__).parent.parent / "ministry_config.yaml"
@@ -35,7 +74,7 @@ LLM_API_URL = os.getenv(
     "LLM_API_URL",
     _api_config.get("url", "http://localhost:4000/chat/completions")
 )
-LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-litellm-master-key")
+LLM_API_KEY = _require_env_var("LLM_API_KEY", "API key for LLM service")
 
 # Legacy OpenRouter support (fallback if LLM_API_KEY not set)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or LLM_API_KEY
