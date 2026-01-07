@@ -162,3 +162,57 @@ class TestLLMApiKeyValidation:
         assert "LLM_API_KEY" in error_msg
         assert "API key for LLM service" in error_msg
         assert "not set" in error_msg
+
+    def test_valid_llm_api_key_loads_successfully(self, monkeypatch):
+        """Configuration loads correctly when LLM_API_KEY is properly set."""
+        # Remove the module from cache to force reimport
+        if "backend.config" in sys.modules:
+            del sys.modules["backend.config"]
+
+        # Set a valid API key
+        test_api_key = "sk-test-valid-api-key-12345"
+        monkeypatch.setenv("LLM_API_KEY", test_api_key)
+
+        # Import should succeed without raising any exception
+        import backend.config
+
+        # Verify the API key was loaded correctly
+        assert backend.config.LLM_API_KEY == test_api_key
+
+        # Verify other config values are also loaded
+        assert backend.config.LLM_API_URL is not None
+        assert backend.config.OPENROUTER_API_KEY is not None
+
+    def test_valid_api_key_sets_openrouter_fallback(self, monkeypatch):
+        """OPENROUTER_API_KEY falls back to LLM_API_KEY when not set separately."""
+        # Remove the module from cache to force reimport
+        if "backend.config" in sys.modules:
+            del sys.modules["backend.config"]
+
+        # Set LLM_API_KEY but not OPENROUTER_API_KEY
+        test_api_key = "sk-test-valid-api-key-67890"
+        monkeypatch.setenv("LLM_API_KEY", test_api_key)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+        import backend.config
+
+        # OPENROUTER_API_KEY should fall back to LLM_API_KEY
+        assert backend.config.OPENROUTER_API_KEY == test_api_key
+
+    def test_separate_openrouter_api_key_respected(self, monkeypatch):
+        """OPENROUTER_API_KEY uses its own value when set separately."""
+        # Remove the module from cache to force reimport
+        if "backend.config" in sys.modules:
+            del sys.modules["backend.config"]
+
+        # Set both API keys to different values
+        llm_key = "sk-llm-key-111"
+        openrouter_key = "sk-openrouter-key-222"
+        monkeypatch.setenv("LLM_API_KEY", llm_key)
+        monkeypatch.setenv("OPENROUTER_API_KEY", openrouter_key)
+
+        import backend.config
+
+        # Each should have its own value
+        assert backend.config.LLM_API_KEY == llm_key
+        assert backend.config.OPENROUTER_API_KEY == openrouter_key
