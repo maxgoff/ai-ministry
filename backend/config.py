@@ -5,6 +5,8 @@ otherwise falls back to hardcoded defaults.
 """
 
 import os
+import secrets
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -52,6 +54,31 @@ def _require_env_var(
 
     return value
 
+# =============================================================================
+# Authentication Configuration
+# =============================================================================
+# JWT Secret Key - MUST be set in production via AUTH_SECRET_KEY env var
+_auth_secret_key = os.getenv("AUTH_SECRET_KEY")
+if _auth_secret_key:
+    AUTH_SECRET_KEY = _auth_secret_key
+else:
+    # Generate a random key for development - NOT secure for production
+    AUTH_SECRET_KEY = secrets.token_urlsafe(32)
+    warnings.warn(
+        "AUTH_SECRET_KEY not set! Using auto-generated key. "
+        "This is insecure for production - set AUTH_SECRET_KEY environment variable. "
+        "Tokens will be invalidated on server restart.",
+        RuntimeWarning,
+    )
+
+# JWT Algorithm
+AUTH_ALGORITHM = "HS256"
+
+# Token expiration time in minutes (default: 60 minutes = 1 hour)
+AUTH_ACCESS_TOKEN_EXPIRE_MINUTES = int(
+    os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
+)
+
 # Find config file (check project root)
 CONFIG_PATH = Path(__file__).parent.parent / "ministry_config.yaml"
 
@@ -88,20 +115,24 @@ _DEFAULT_AVAILABLE_MODELS = [
     "google/gemini-3-pro",
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
-    "anthropic/claude-opus-4.5",
+    "anthropic/claude-opus-4.6",
     "anthropic/claude-sonnet-4.5",
     "anthropic/claude-sonnet-4",
     "anthropic/claude-3.5-sonnet",
     "anthropic/claude-opus-4",
     "moonshot/kimi-k2-thinking",
+    "nvidia/llama-3.3-70b",
+    "nvidia/kimi-k2-instruct",
+    "nvidia/kimi-k2-thinking",
+    "nvidia/kimi-k2.5",
     "x-ai/grok-4.1",
-    "x-ai/grok-2",
+    "x-ai/grok-3",
 ]
 
 _DEFAULT_MINISTRY_MODELS = [
     "openai/gpt-4.1",
     "google/gemini-3-pro",
-    "anthropic/claude-opus-4.5",
+    "anthropic/claude-opus-4.6",
     "moonshot/kimi-k2-thinking",
     "x-ai/grok-4.1",
 ]
@@ -140,7 +171,7 @@ _DEFAULT_PERSONAS = {
 _DEFAULT_MODEL_PERSONA_MAP = {
     "openai/gpt-4.1": "analytical_strategist",
     "google/gemini-3-pro": "systems_thinker",
-    "anthropic/claude-opus-4.5": "principled_reasoner",
+    "anthropic/claude-opus-4.6": "principled_reasoner",
     "moonshot/kimi-k2-thinking": "deep_analyst",
     "x-ai/grok-4.1": "unconventional_thinker",
 }
@@ -178,6 +209,16 @@ DEFAULT_PRIME_MINISTER = _yaml_config.get("prime_minister", "google/gemini-3-pro
 
 # Legacy alias for backward compatibility
 CHAIRMAN_MODEL = DEFAULT_PRIME_MINISTER
+
+# =============================================================================
+# Researcher Configuration (Stage 0 - Web Search Grounding)
+# =============================================================================
+XAI_API_KEY = os.getenv("XAI_API_KEY")
+
+_researcher_config = _yaml_config.get("researcher", {})
+RESEARCHER_ENABLED = _researcher_config.get("enabled", True)
+RESEARCHER_MODEL = _researcher_config.get("model", "grok-4-1-fast")
+RESEARCHER_TIMEOUT = _researcher_config.get("timeout", 120)
 
 # Data directory for conversation storage
 DATA_DIR = "data/conversations"

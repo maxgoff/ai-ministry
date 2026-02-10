@@ -1,10 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
+import AuthForm from './components/AuthForm';
 import { api } from './api';
 import './App.css';
 
 function App() {
+  // Authentication state
+  const [user, setUser] = useState(null);
+  const [authChecking, setAuthChecking] = useState(true);
+
+  // App state
   const [conversations, setConversations] = useState([]);
   const [currentConversationId, setCurrentConversationId] = useState(null);
   const [currentConversation, setCurrentConversation] = useState(null);
@@ -15,10 +21,17 @@ function App() {
     ministryConfigRef.current = config;
   };
 
-  // Load conversations on mount
+  // Check for existing token on app load
   useEffect(() => {
-    loadConversations();
+    checkAuth();
   }, []);
+
+  // Load conversations when authenticated
+  useEffect(() => {
+    if (user) {
+      loadConversations();
+    }
+  }, [user]);
 
   // Load conversation details when selected
   useEffect(() => {
@@ -32,7 +45,11 @@ function App() {
       const convs = await api.listConversations();
       setConversations(convs);
     } catch (error) {
-      console.error('Failed to load conversations:', error);
+      // Handle token expiration gracefully
+      if (error.message === 'Not authenticated') {
+        handleLogout();
+        return;
+      }
     }
   };
 
@@ -41,8 +58,47 @@ function App() {
       const conv = await api.getConversation(id);
       setCurrentConversation(conv);
     } catch (error) {
-      console.error('Failed to load conversation:', error);
+      // Handle token expiration gracefully
+      if (error.message === 'Not authenticated') {
+        handleLogout();
+        return;
+      }
     }
+  };
+
+  const checkAuth = async () => {
+    if (!api.isAuthenticated()) {
+      setAuthChecking(false);
+      return;
+    }
+
+    try {
+      const userData = await api.getMe();
+      setUser(userData);
+    } catch {
+      // Token expired or invalid - clear it
+      api.logout();
+    } finally {
+      setAuthChecking(false);
+    }
+  };
+
+  const handleAuthSuccess = async () => {
+    try {
+      const userData = await api.getMe();
+      setUser(userData);
+    } catch {
+      // This shouldn't happen right after login, but handle it gracefully
+      api.logout();
+    }
+  };
+
+  const handleLogout = () => {
+    api.logout();
+    setUser(null);
+    setConversations([]);
+    setCurrentConversationId(null);
+    setCurrentConversation(null);
   };
 
   const handleNewConversation = async () => {
@@ -77,11 +133,13 @@ function App() {
       // Create a partial assistant message that will be updated progressively
       const assistantMessage = {
         role: 'assistant',
+        stage0: null,
         stage1: null,
         stage2: null,
         stage3: null,
         metadata: null,
         loading: {
+          stage0: false,
           stage1: false,
           stage2: false,
           stage3: false,
@@ -97,6 +155,25 @@ function App() {
       // Send message with streaming
       await api.sendMessageStream(currentConversationId, content, (eventType, event) => {
         switch (eventType) {
+          case 'stage0_start':
+            setCurrentConversation((prev) => {
+              const messages = [...prev.messages];
+              const lastMsg = messages[messages.length - 1];
+              lastMsg.loading.stage0 = true;
+              return { ...prev, messages };
+            });
+            break;
+
+          case 'stage0_complete':
+            setCurrentConversation((prev) => {
+              const messages = [...prev.messages];
+              const lastMsg = messages[messages.length - 1];
+              lastMsg.stage0 = event.data;
+              lastMsg.loading.stage0 = false;
+              return { ...prev, messages };
+            });
+            break;
+
           case 'stage1_start':
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
@@ -186,6 +263,21 @@ function App() {
     }
   };
 
+  // Show loading state while checking authentication
+  if (authChecking) {
+    return (
+      <div className="app app-loading">
+        <div className="loading-spinner">Loading...</div>
+      </div>
+    );
+  }
+
+  // Show auth form when not authenticated
+  if (!user) {
+    return <AuthForm onAuthSuccess={handleAuthSuccess} />;
+  }
+
+  // Show main app when authenticated
   return (
     <div className="app">
       <Sidebar
@@ -194,6 +286,8 @@ function App() {
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
         onMinistryConfigChange={handleMinistryConfigChange}
+        user={user}
+        onLogout={handleLogout}
       />
       <ChatInterface
         conversation={currentConversation}

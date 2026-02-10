@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
+import Stage0 from './Stage0';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
@@ -71,6 +72,15 @@ export default function ChatInterface({
               ) : (
                 <div className="assistant-message">
                   <div className="message-label">AI Ministry</div>
+
+                  {/* Stage 0 */}
+                  {msg.loading?.stage0 && (
+                    <div className="stage-loading">
+                      <div className="spinner"></div>
+                      <span>Running Stage 0: Researching current facts...</span>
+                    </div>
+                  )}
+                  {msg.stage0 && <Stage0 briefing={msg.stage0} />}
 
                   {/* Stage 1 */}
                   {msg.loading?.stage1 && (

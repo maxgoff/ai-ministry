@@ -1,14 +1,74 @@
-"""3-stage AI Ministry orchestration."""
+"""3-stage AI Ministry orchestration with optional Stage 0 research."""
 
+from datetime import date
 from typing import List, Dict, Any, Tuple, Optional
 from .openrouter import query_models_parallel, query_model
-from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, MODEL_PERSONAS, AVAILABLE_PERSONAS, DEFAULT_MODEL_PERSONAS
+from .config import (
+    COUNCIL_MODELS, CHAIRMAN_MODEL, MODEL_PERSONAS, AVAILABLE_PERSONAS,
+    DEFAULT_MODEL_PERSONAS, XAI_API_KEY, RESEARCHER_ENABLED,
+    RESEARCHER_MODEL, RESEARCHER_TIMEOUT,
+)
+from .researcher import run_research
+
+
+async def stage0_research(user_query: str) -> Optional[Dict[str, Any]]:
+    """
+    Stage 0: Run web research to ground the ministry in current facts.
+
+    Returns a briefing dict or None if research is unavailable/disabled/failed.
+    """
+    if not RESEARCHER_ENABLED:
+        print("[Stage 0] Researcher disabled in config.")
+        return None
+
+    if not XAI_API_KEY:
+        print("[Stage 0] XAI_API_KEY not set — skipping research.")
+        return None
+
+    try:
+        briefing = await run_research(
+            user_query,
+            api_key=XAI_API_KEY,
+            timeout=float(RESEARCHER_TIMEOUT),
+            model=RESEARCHER_MODEL,
+        )
+        if briefing:
+            print(f"[Stage 0] Research complete: {len(briefing.get('citations', []))} citations")
+        else:
+            print("[Stage 0] Research returned empty result.")
+        return briefing
+    except Exception as e:
+        print(f"[Stage 0] Research failed: {e}")
+        return None
+
+
+def _build_research_context(research_briefing: Optional[Dict[str, Any]]) -> str:
+    """Build the research context block to inject into prompts."""
+    today = date.today().strftime("%B %d, %Y")
+    parts = [f"Today's date is {today}."]
+
+    if research_briefing:
+        parts.append("")
+        parts.append("RESEARCH BRIEFING (verified via web search):")
+        if research_briefing.get("key_facts"):
+            parts.append(f"\nKey Facts:\n{research_briefing['key_facts']}")
+        if research_briefing.get("summary"):
+            parts.append(f"\nSummary:\n{research_briefing['summary']}")
+        if research_briefing.get("citations"):
+            urls = [c.get("url", "") for c in research_briefing["citations"] if c.get("url")]
+            if urls:
+                parts.append(f"\nSources: {', '.join(urls[:10])}")
+        parts.append("")
+        parts.append("Do not contradict verified facts above. If you disagree with any finding, explain why.")
+
+    return "\n".join(parts)
 
 
 def _build_scaffolded_prompt(
     user_query: str,
     model: str,
-    model_personas: Optional[Dict[str, str]] = None
+    model_personas: Optional[Dict[str, str]] = None,
+    research_briefing: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Build a scaffolded prompt with persona for a specific model.
@@ -19,6 +79,7 @@ def _build_scaffolded_prompt(
         user_query: The user's question
         model: The model identifier
         model_personas: Optional mapping of model -> persona_id
+        research_briefing: Optional Stage 0 research briefing
     """
     # Use custom persona mapping if provided
     if model_personas and model in model_personas:
@@ -34,7 +95,11 @@ def _build_scaffolded_prompt(
             "instruction": "You provide thoughtful, well-reasoned analysis."
         })
 
+    research_context = _build_research_context(research_briefing)
+
     return f"""You are the {persona['name']} on an expert ministry. {persona['instruction']}
+
+{research_context}
 
 Question: {user_query}
 
@@ -48,7 +113,8 @@ Your analysis:"""
 async def stage1_collect_responses(
     user_query: str,
     ministry_models: Optional[List[str]] = None,
-    model_personas: Optional[Dict[str, str]] = None
+    model_personas: Optional[Dict[str, str]] = None,
+    research_briefing: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all ministry models.
@@ -60,6 +126,7 @@ async def stage1_collect_responses(
         user_query: The user's question
         ministry_models: Optional list of models to use (defaults to COUNCIL_MODELS)
         model_personas: Optional mapping of model -> persona_id
+        research_briefing: Optional Stage 0 research briefing
 
     Returns:
         List of dicts with 'model' and 'response' keys
@@ -70,7 +137,7 @@ async def stage1_collect_responses(
 
     async def query_with_persona(model: str) -> tuple:
         """Query a single model with its personalized prompt."""
-        prompt = _build_scaffolded_prompt(user_query, model, model_personas)
+        prompt = _build_scaffolded_prompt(user_query, model, model_personas, research_briefing)
         messages = [{"role": "user", "content": prompt}]
         response = await query_model(model, messages)
         return model, response
@@ -97,7 +164,8 @@ async def stage1_collect_responses(
 async def stage2_collect_rankings(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
-    ministry_models: Optional[List[str]] = None
+    ministry_models: Optional[List[str]] = None,
+    research_briefing: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -106,6 +174,7 @@ async def stage2_collect_rankings(
         user_query: The original user query
         stage1_results: Results from Stage 1
         ministry_models: Optional list of models to use for ranking
+        research_briefing: Optional Stage 0 research briefing
 
     Returns:
         Tuple of (rankings list, label_to_model mapping)
@@ -127,7 +196,12 @@ async def stage2_collect_rankings(
         for label, result in zip(labels, stage1_results)
     ])
 
-    ranking_prompt = f"""You are evaluating different responses to the following question:
+    # Build research context for factual accuracy assessment
+    research_context = _build_research_context(research_briefing)
+
+    ranking_prompt = f"""{research_context}
+
+You are evaluating different responses to the following question:
 
 Question: {user_query}
 
@@ -137,7 +211,8 @@ Here are the responses from different models (anonymized):
 
 Your task:
 1. First, evaluate each response individually. For each response, explain what it does well and what it does poorly.
-2. Then, at the very end of your response, provide a final ranking.
+2. Assess factual accuracy — responses that align with the verified research facts should be ranked higher.
+3. Then, at the very end of your response, provide a final ranking.
 
 IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
 - Start with the line "FINAL RANKING:" (all caps, with colon)
@@ -182,7 +257,8 @@ async def stage3_synthesize_final(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
-    prime_minister: Optional[str] = None
+    prime_minister: Optional[str] = None,
+    research_briefing: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Stage 3: Prime Minister synthesizes final response.
@@ -192,6 +268,7 @@ async def stage3_synthesize_final(
         stage1_results: Individual model responses from Stage 1
         stage2_results: Rankings from Stage 2
         prime_minister: Optional model to use for synthesis (defaults to CHAIRMAN_MODEL)
+        research_briefing: Optional Stage 0 research briefing
 
     Returns:
         Dict with 'model' and 'response' keys
@@ -209,11 +286,29 @@ async def stage3_synthesize_final(
         for result in stage2_results
     ])
 
-    pm_prompt = f"""You are the Prime Minister of an AI Ministry. Multiple AI models—each with a distinct analytical perspective—have provided responses to a user's question, and then ranked each other's responses.
+    # Build Stage 0 section for PM prompt
+    stage0_section = ""
+    if research_briefing:
+        stage0_parts = ["STAGE 0 - Research Briefing (verified via web search):"]
+        if research_briefing.get("key_facts"):
+            stage0_parts.append(f"\nKey Facts:\n{research_briefing['key_facts']}")
+        if research_briefing.get("summary"):
+            stage0_parts.append(f"\nSummary:\n{research_briefing['summary']}")
+        if research_briefing.get("citations"):
+            urls = [c.get("url", "") for c in research_briefing["citations"] if c.get("url")]
+            if urls:
+                stage0_parts.append(f"\nSources: {', '.join(urls[:10])}")
+        stage0_section = "\n".join(stage0_parts) + "\n\n"
+
+    research_context = _build_research_context(research_briefing)
+
+    pm_prompt = f"""{research_context}
+
+You are the Prime Minister of an AI Ministry. Multiple AI models—each with a distinct analytical perspective—have provided responses to a user's question, and then ranked each other's responses.
 
 Original Question: {user_query}
 
-STAGE 1 - Individual Responses:
+{stage0_section}STAGE 1 - Individual Responses:
 {stage1_text}
 
 STAGE 2 - Peer Rankings:
@@ -377,9 +472,9 @@ async def run_full_council(
     ministry_models: Optional[List[str]] = None,
     model_personas: Optional[Dict[str, str]] = None,
     prime_minister: Optional[str] = None
-) -> Tuple[List, List, Dict, Dict]:
+) -> Tuple[Optional[Dict], List, List, Dict, Dict]:
     """
-    Run the complete 3-stage ministry process.
+    Run the complete ministry process (Stage 0 research + 3-stage deliberation).
 
     Args:
         user_query: The user's question
@@ -388,18 +483,22 @@ async def run_full_council(
         prime_minister: Optional model for final synthesis
 
     Returns:
-        Tuple of (stage1_results, stage2_results, stage3_result, metadata)
+        Tuple of (stage0_briefing, stage1_results, stage2_results, stage3_result, metadata)
     """
+    # Stage 0: Research (graceful failure returns None)
+    stage0_briefing = await stage0_research(user_query)
+
     # Stage 1: Collect individual responses
     stage1_results = await stage1_collect_responses(
         user_query,
         ministry_models=ministry_models,
-        model_personas=model_personas
+        model_personas=model_personas,
+        research_briefing=stage0_briefing,
     )
 
     # If no models responded successfully, return error
     if not stage1_results:
-        return [], [], {
+        return stage0_briefing, [], [], {
             "model": "error",
             "response": "All models failed to respond. Please try again."
         }, {}
@@ -408,7 +507,8 @@ async def run_full_council(
     stage2_results, label_to_model = await stage2_collect_rankings(
         user_query,
         stage1_results,
-        ministry_models=ministry_models
+        ministry_models=ministry_models,
+        research_briefing=stage0_briefing,
     )
 
     # Calculate aggregate rankings
@@ -419,7 +519,8 @@ async def run_full_council(
         user_query,
         stage1_results,
         stage2_results,
-        prime_minister=prime_minister
+        prime_minister=prime_minister,
+        research_briefing=stage0_briefing,
     )
 
     # Prepare metadata
@@ -428,4 +529,4 @@ async def run_full_council(
         "aggregate_rankings": aggregate_rankings
     }
 
-    return stage1_results, stage2_results, stage3_result, metadata
+    return stage0_briefing, stage1_results, stage2_results, stage3_result, metadata

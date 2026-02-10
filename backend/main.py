@@ -1,9 +1,9 @@
 """FastAPI backend for AI Ministry."""
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import List, Dict, Any, Optional
 import uuid
 import json
@@ -11,9 +11,10 @@ import asyncio
 from datetime import datetime
 
 from . import storage
-from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
+from .council import run_full_council, generate_conversation_title, stage0_research, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
 from .config import AVAILABLE_MODELS, AVAILABLE_PERSONAS, DEFAULT_MINISTRY_MODELS, DEFAULT_PRIME_MINISTER, DEFAULT_MODEL_PERSONAS
 from .openrouter import query_model
+from .auth import get_password_hash, verify_password, create_access_token, get_current_user
 
 app = FastAPI(title="AI Ministry API")
 
@@ -61,15 +62,157 @@ class Conversation(BaseModel):
     messages: List[Dict[str, Any]]
 
 
+# ============================================
+# Authentication Models
+# ============================================
+
+class UserCreate(BaseModel):
+    """Request to register a new user."""
+    email: EmailStr
+    password: str
+
+
+class UserLogin(BaseModel):
+    """Request to login an existing user."""
+    email: EmailStr
+    password: str
+
+
+class Token(BaseModel):
+    """JWT token response."""
+    access_token: str
+    token_type: str
+
+
+class User(BaseModel):
+    """User response model (no password exposed)."""
+    id: str
+    email: str
+    created_at: str
+
+
+# ============================================
+# Authentication Endpoints
+# ============================================
+
+@app.post("/api/auth/register", response_model=Token)
+async def register(request: UserCreate):
+    """
+    Register a new user and return a JWT token.
+
+    Creates a new user account with the provided email and password.
+    Returns a JWT token on successful registration.
+
+    Raises:
+        HTTPException 400: If email already exists
+    """
+    # Check if user with this email already exists
+    existing_user = storage.get_user_by_email(request.email)
+    if existing_user is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered"
+        )
+
+    # Hash the password
+    hashed_password = get_password_hash(request.password)
+
+    # Create user in database
+    user_id = str(uuid.uuid4())
+    user = storage.create_user(user_id, request.email, hashed_password)
+
+    # Create JWT token
+    access_token = create_access_token(data={"sub": user["id"]})
+
+    return Token(access_token=access_token, token_type="bearer")
+
+
+@app.post("/api/auth/login", response_model=Token)
+async def login(request: UserLogin):
+    """
+    Authenticate a user and return a JWT token.
+
+    Validates the provided email and password credentials.
+    Returns a JWT token on successful authentication.
+
+    Raises:
+        HTTPException 401: If email doesn't exist or password is incorrect
+    """
+    # Check if user exists
+    user = storage.get_user_by_email(request.email)
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
+
+    # Verify password
+    if not verify_password(request.password, user["hashed_password"]):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
+
+    # Create JWT token
+    access_token = create_access_token(data={"sub": user["id"]})
+
+    return Token(access_token=access_token, token_type="bearer")
+
+
+@app.get("/api/auth/me", response_model=User)
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """
+    Get the current authenticated user's profile.
+
+    Requires a valid JWT token in the Authorization header.
+    Returns the user's id, email, and created_at timestamp.
+
+    Raises:
+        HTTPException 401: If not authenticated or token is invalid
+    """
+    user_id = current_user.get("sub")
+    user = storage.get_user_by_id(user_id)
+
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="User not found"
+        )
+
+    return User(
+        id=user["id"],
+        email=user["email"],
+        created_at=user["created_at"]
+    )
+
+
 @app.get("/")
 async def root():
-    """Health check endpoint."""
+    """
+    Health check endpoint.
+
+    This is a public endpoint that does not require authentication.
+    Use this to verify the API service is running.
+
+    Returns:
+        dict: Status object with "ok" status and service name
+    """
     return {"status": "ok", "service": "AI Ministry API"}
 
 
 @app.get("/api/config")
 async def get_config():
-    """Get available models, personas, and default configuration."""
+    """
+    Get available models, personas, and default configuration.
+
+    This is a public endpoint that does not require authentication.
+    Returns the configuration needed for the frontend to display
+    available options before user authentication.
+
+    Returns:
+        dict: Configuration containing available_models, available_personas,
+              default_ministry_models, default_prime_minister, and default_model_personas
+    """
     return {
         "available_models": AVAILABLE_MODELS,
         "available_personas": AVAILABLE_PERSONAS,
@@ -80,8 +223,16 @@ async def get_config():
 
 
 @app.get("/api/models/health")
-async def check_models_health():
-    """Check which models are currently healthy/available."""
+async def check_models_health(current_user: dict = Depends(get_current_user)):
+    """
+    Check which models are currently healthy/available.
+
+    Requires a valid JWT token in the Authorization header.
+    This endpoint consumes API credits by making test calls to each model.
+
+    Raises:
+        HTTPException 401: If not authenticated or token is invalid
+    """
     async def check_model(model: str) -> dict:
         """Check if a single model is healthy."""
         try:
@@ -114,36 +265,87 @@ async def check_models_health():
 
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
-async def list_conversations():
-    """List all conversations (metadata only)."""
-    return storage.list_conversations()
+async def list_conversations(current_user: dict = Depends(get_current_user)):
+    """
+    List all conversations for the current authenticated user.
+
+    Requires a valid JWT token in the Authorization header.
+    Returns only conversations owned by the authenticated user.
+
+    Raises:
+        HTTPException 401: If not authenticated or token is invalid
+    """
+    user_id = current_user.get("sub")
+    return storage.list_conversations(user_id)
 
 
 @app.post("/api/conversations", response_model=Conversation)
-async def create_conversation(request: CreateConversationRequest):
-    """Create a new conversation."""
+async def create_conversation(
+    request: CreateConversationRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Create a new conversation for the current authenticated user.
+
+    Requires a valid JWT token in the Authorization header.
+    The new conversation is automatically associated with the authenticated user.
+
+    Raises:
+        HTTPException 401: If not authenticated or token is invalid
+    """
+    user_id = current_user.get("sub")
     conversation_id = str(uuid.uuid4())
-    conversation = storage.create_conversation(conversation_id)
+    conversation = storage.create_conversation(conversation_id, user_id)
     return conversation
 
 
 @app.get("/api/conversations/{conversation_id}", response_model=Conversation)
-async def get_conversation(conversation_id: str):
-    """Get a specific conversation with all its messages."""
-    conversation = storage.get_conversation(conversation_id)
+async def get_conversation(
+    conversation_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get a specific conversation with all its messages.
+
+    Requires a valid JWT token in the Authorization header.
+    Returns 404 if conversation doesn't exist or is not owned by the user
+    (prevents enumeration attacks).
+
+    Raises:
+        HTTPException 401: If not authenticated or token is invalid
+        HTTPException 404: If conversation not found or not owned by user
+    """
+    user_id = current_user.get("sub")
+    conversation = storage.get_conversation(conversation_id, user_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
 
 
 @app.post("/api/conversations/{conversation_id}/message")
-async def send_message(conversation_id: str, request: SendMessageRequest):
+async def send_message(
+    conversation_id: str,
+    request: SendMessageRequest,
+    current_user: dict = Depends(get_current_user)
+):
     """
     Send a message and run the 3-stage ministry process.
     Returns the complete response with all stages.
+
+    Requires a valid JWT token in the Authorization header.
+    Verifies that the authenticated user owns the conversation.
+    Returns 404 if conversation doesn't exist or is not owned by user
+    (prevents enumeration attacks).
+
+    Critical: This endpoint consumes LLM API credits.
+
+    Raises:
+        HTTPException 401: If not authenticated or token is invalid
+        HTTPException 404: If conversation not found or not owned by user
     """
-    # Check if conversation exists
-    conversation = storage.get_conversation(conversation_id)
+    # Check if conversation exists and is owned by the authenticated user
+    user_id = current_user.get("sub")
+    conversation = storage.get_conversation(conversation_id, user_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -167,8 +369,8 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         model_personas = request.ministry_config.model_personas
         prime_minister = request.ministry_config.prime_minister
 
-    # Run the 3-stage ministry process
-    stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
+    # Run the full ministry process (Stage 0 research + 3-stage deliberation)
+    stage0_briefing, stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
         request.content,
         ministry_models=ministry_models,
         model_personas=model_personas,
@@ -178,6 +380,7 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     # Add assistant message with all stages
     storage.add_assistant_message(
         conversation_id,
+        stage0_briefing,
         stage1_results,
         stage2_results,
         stage3_result
@@ -185,6 +388,7 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
 
     # Return the complete response with metadata
     return {
+        "stage0": stage0_briefing,
         "stage1": stage1_results,
         "stage2": stage2_results,
         "stage3": stage3_result,
@@ -193,13 +397,29 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
 
 
 @app.post("/api/conversations/{conversation_id}/message/stream")
-async def send_message_stream(conversation_id: str, request: SendMessageRequest):
+async def send_message_stream(
+    conversation_id: str,
+    request: SendMessageRequest,
+    current_user: dict = Depends(get_current_user)
+):
     """
     Send a message and stream the 3-stage ministry process.
     Returns Server-Sent Events as each stage completes.
+
+    Requires a valid JWT token in the Authorization header.
+    Verifies that the authenticated user owns the conversation.
+    Returns 404 if conversation doesn't exist or is not owned by user
+    (prevents enumeration attacks).
+
+    Critical: This endpoint consumes LLM API credits.
+
+    Raises:
+        HTTPException 401: If not authenticated or token is invalid
+        HTTPException 404: If conversation not found or not owned by user
     """
-    # Check if conversation exists
-    conversation = storage.get_conversation(conversation_id)
+    # Check if conversation exists and is owned by the authenticated user
+    user_id = current_user.get("sub")
+    conversation = storage.get_conversation(conversation_id, user_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -225,12 +445,18 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             if is_first_message:
                 title_task = asyncio.create_task(generate_conversation_title(request.content))
 
+            # Stage 0: Research
+            yield f"data: {json.dumps({'type': 'stage0_start'})}\n\n"
+            research_briefing = await stage0_research(request.content)
+            yield f"data: {json.dumps({'type': 'stage0_complete', 'data': research_briefing})}\n\n"
+
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
             stage1_results = await stage1_collect_responses(
                 request.content,
                 ministry_models=ministry_models,
-                model_personas=model_personas
+                model_personas=model_personas,
+                research_briefing=research_briefing,
             )
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
@@ -239,7 +465,8 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             stage2_results, label_to_model = await stage2_collect_rankings(
                 request.content,
                 stage1_results,
-                ministry_models=ministry_models
+                ministry_models=ministry_models,
+                research_briefing=research_briefing,
             )
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
@@ -250,7 +477,8 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 request.content,
                 stage1_results,
                 stage2_results,
-                prime_minister=prime_minister
+                prime_minister=prime_minister,
+                research_briefing=research_briefing,
             )
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
@@ -263,6 +491,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             # Save complete assistant message
             storage.add_assistant_message(
                 conversation_id,
+                research_briefing,
                 stage1_results,
                 stage2_results,
                 stage3_result
@@ -311,6 +540,33 @@ def _conversation_to_markdown(conversation: Dict[str, Any]) -> str:
             lines.append("")
 
         elif msg['role'] == 'assistant':
+            # Stage 0: Research Briefing
+            stage0 = msg.get('stage0')
+            if stage0:
+                lines.append("## Research Briefing")
+                lines.append("")
+                lines.append(f"*Researched by {stage0.get('model', 'Grok')} on {stage0.get('date', '')}*")
+                lines.append("")
+                if stage0.get('key_facts'):
+                    lines.append("### Key Facts")
+                    lines.append("")
+                    lines.append(stage0['key_facts'])
+                    lines.append("")
+                if stage0.get('summary'):
+                    lines.append("### Summary")
+                    lines.append("")
+                    lines.append(stage0['summary'])
+                    lines.append("")
+                if stage0.get('citations'):
+                    lines.append("### Sources")
+                    lines.append("")
+                    for citation in stage0['citations']:
+                        url = citation.get('url', '')
+                        title = citation.get('title', url)
+                        if url:
+                            lines.append(f"- [{title}]({url})")
+                    lines.append("")
+
             # Stage 1: Individual Responses
             lines.append("## Ministry Responses")
             lines.append("")
@@ -350,9 +606,24 @@ def _conversation_to_markdown(conversation: Dict[str, Any]) -> str:
 
 
 @app.get("/api/conversations/{conversation_id}/export/markdown")
-async def export_conversation_markdown(conversation_id: str):
-    """Export a conversation as Markdown."""
-    conversation = storage.get_conversation(conversation_id)
+async def export_conversation_markdown(
+    conversation_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Export a conversation as Markdown.
+
+    Requires a valid JWT token in the Authorization header.
+    Verifies that the authenticated user owns the conversation.
+    Returns 404 if conversation doesn't exist or is not owned by user
+    (prevents enumeration attacks).
+
+    Raises:
+        HTTPException 401: If not authenticated or token is invalid
+        HTTPException 404: If conversation not found or not owned by user
+    """
+    user_id = current_user.get("sub")
+    conversation = storage.get_conversation(conversation_id, user_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -373,9 +644,25 @@ async def export_conversation_markdown(conversation_id: str):
 
 
 @app.get("/api/conversations/{conversation_id}/export/pdf")
-async def export_conversation_pdf(conversation_id: str):
-    """Export a conversation as PDF."""
-    conversation = storage.get_conversation(conversation_id)
+async def export_conversation_pdf(
+    conversation_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Export a conversation as PDF.
+
+    Requires a valid JWT token in the Authorization header.
+    Verifies that the authenticated user owns the conversation.
+    Returns 404 if conversation doesn't exist or is not owned by user
+    (prevents enumeration attacks).
+
+    Raises:
+        HTTPException 401: If not authenticated or token is invalid
+        HTTPException 404: If conversation not found or not owned by user
+        HTTPException 501: If fpdf2 package is not installed
+    """
+    user_id = current_user.get("sub")
+    conversation = storage.get_conversation(conversation_id, user_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -455,6 +742,39 @@ async def export_conversation_pdf(conversation_id: str):
                 pdf.ln(10)
 
             elif msg['role'] == 'assistant':
+                # Stage 0: Research Briefing
+                stage0 = msg.get('stage0')
+                if stage0:
+                    pdf.set_font('Helvetica', 'B', 14)
+                    pdf.set_text_color(0, 128, 128)
+                    pdf.cell(0, 10, 'Research Briefing')
+                    pdf.ln(8)
+
+                    pdf.set_font('Helvetica', 'I', 10)
+                    pdf.set_text_color(128, 128, 128)
+                    pdf.cell(0, 6, f"Researched by {stage0.get('model', 'Grok')} on {stage0.get('date', '')}")
+                    pdf.ln(6)
+
+                    if stage0.get('key_facts'):
+                        pdf.set_font('Helvetica', 'B', 11)
+                        pdf.set_text_color(0, 100, 100)
+                        pdf.cell(0, 8, 'Key Facts')
+                        pdf.ln(6)
+                        pdf.set_font('Helvetica', '', 10)
+                        pdf.set_text_color(0, 0, 0)
+                        pdf.multi_cell(0, 5, normalize_text(stage0['key_facts']))
+                        pdf.ln(6)
+
+                    if stage0.get('summary'):
+                        pdf.set_font('Helvetica', 'B', 11)
+                        pdf.set_text_color(0, 100, 100)
+                        pdf.cell(0, 8, 'Summary')
+                        pdf.ln(6)
+                        pdf.set_font('Helvetica', '', 10)
+                        pdf.set_text_color(0, 0, 0)
+                        pdf.multi_cell(0, 5, normalize_text(stage0['summary']))
+                        pdf.ln(8)
+
                 # Stage 1
                 pdf.set_font('Helvetica', 'B', 14)
                 pdf.set_text_color(52, 73, 94)

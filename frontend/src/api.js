@@ -3,8 +3,136 @@
  */
 
 const API_BASE = 'http://localhost:8001';
+const TOKEN_KEY = 'ai_ministry_auth_token';
+
+/**
+ * Get the stored authentication token from localStorage.
+ * @returns {string|null} The JWT token or null if not authenticated
+ */
+function getToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+/**
+ * Store the authentication token in localStorage.
+ * @param {string} token - The JWT token to store
+ */
+function setToken(token) {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+/**
+ * Remove the authentication token from localStorage.
+ */
+function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+/**
+ * Get the Authorization header for authenticated requests.
+ * @returns {object} Headers object with Authorization if token exists
+ */
+export function getAuthHeader() {
+  const token = getToken();
+  if (token) {
+    return { Authorization: `Bearer ${token}` };
+  }
+  return {};
+}
 
 export const api = {
+  /**
+   * Check if user is currently authenticated (has token).
+   * @returns {boolean} True if token exists in localStorage
+   */
+  isAuthenticated() {
+    return !!getToken();
+  },
+
+  /**
+   * Register a new user account.
+   * @param {string} email - User email address
+   * @param {string} password - User password
+   * @returns {Promise<{access_token: string, token_type: string}>}
+   */
+  async register(email, password) {
+    const response = await fetch(`${API_BASE}/api/auth/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, password }),
+    });
+    if (!response.ok) {
+      if (response.status === 400) {
+        const error = await response.json();
+        throw new Error(error.detail || 'Email already registered');
+      }
+      if (response.status === 422) {
+        throw new Error('Invalid email format');
+      }
+      throw new Error('Registration failed');
+    }
+    const data = await response.json();
+    setToken(data.access_token);
+    return data;
+  },
+
+  /**
+   * Login with email and password.
+   * @param {string} email - User email address
+   * @param {string} password - User password
+   * @returns {Promise<{access_token: string, token_type: string}>}
+   */
+  async login(email, password) {
+    const response = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, password }),
+    });
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('Invalid email or password');
+      }
+      if (response.status === 422) {
+        throw new Error('Invalid email format');
+      }
+      throw new Error('Login failed');
+    }
+    const data = await response.json();
+    setToken(data.access_token);
+    return data;
+  },
+
+  /**
+   * Logout the current user by clearing the stored token.
+   */
+  logout() {
+    clearToken();
+  },
+
+  /**
+   * Get the current authenticated user's profile.
+   * @returns {Promise<{id: string, email: string, created_at: string}>}
+   */
+  async getMe() {
+    const response = await fetch(`${API_BASE}/api/auth/me`, {
+      headers: {
+        ...getAuthHeader(),
+      },
+    });
+    if (!response.ok) {
+      if (response.status === 401) {
+        clearToken();
+        throw new Error('Not authenticated');
+      }
+      throw new Error('Failed to get user profile');
+    }
+    return response.json();
+  },
+
   /**
    * Get available models, personas, and default configuration.
    */
@@ -18,51 +146,88 @@ export const api = {
 
   /**
    * Check health status of all available models.
+   * Requires authentication.
    */
   async checkModelsHealth() {
-    const response = await fetch(`${API_BASE}/api/models/health`);
+    const response = await fetch(`${API_BASE}/api/models/health`, {
+      headers: {
+        ...getAuthHeader(),
+      },
+    });
     if (!response.ok) {
+      if (response.status === 401) {
+        clearToken();
+        throw new Error('Not authenticated');
+      }
       throw new Error('Failed to check models health');
     }
     return response.json();
   },
 
   /**
-   * List all conversations.
+   * List all conversations for the authenticated user.
+   * Requires authentication.
    */
   async listConversations() {
-    const response = await fetch(`${API_BASE}/api/conversations`);
+    const response = await fetch(`${API_BASE}/api/conversations`, {
+      headers: {
+        ...getAuthHeader(),
+      },
+    });
     if (!response.ok) {
+      if (response.status === 401) {
+        clearToken();
+        throw new Error('Not authenticated');
+      }
       throw new Error('Failed to list conversations');
     }
     return response.json();
   },
 
   /**
-   * Create a new conversation.
+   * Create a new conversation for the authenticated user.
+   * Requires authentication.
    */
   async createConversation() {
     const response = await fetch(`${API_BASE}/api/conversations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...getAuthHeader(),
       },
       body: JSON.stringify({}),
     });
     if (!response.ok) {
+      if (response.status === 401) {
+        clearToken();
+        throw new Error('Not authenticated');
+      }
       throw new Error('Failed to create conversation');
     }
     return response.json();
   },
 
   /**
-   * Get a specific conversation.
+   * Get a specific conversation owned by the authenticated user.
+   * Requires authentication.
    */
   async getConversation(conversationId) {
     const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}`
+      `${API_BASE}/api/conversations/${conversationId}`,
+      {
+        headers: {
+          ...getAuthHeader(),
+        },
+      }
     );
     if (!response.ok) {
+      if (response.status === 401) {
+        clearToken();
+        throw new Error('Not authenticated');
+      }
+      if (response.status === 404) {
+        throw new Error('Conversation not found');
+      }
       throw new Error('Failed to get conversation');
     }
     return response.json();
@@ -70,6 +235,7 @@ export const api = {
 
   /**
    * Send a message in a conversation.
+   * Requires authentication and ownership of the conversation.
    */
   async sendMessage(conversationId, content) {
     const response = await fetch(
@@ -78,11 +244,19 @@ export const api = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...getAuthHeader(),
         },
         body: JSON.stringify({ content }),
       }
     );
     if (!response.ok) {
+      if (response.status === 401) {
+        clearToken();
+        throw new Error('Not authenticated');
+      }
+      if (response.status === 404) {
+        throw new Error('Conversation not found');
+      }
       throw new Error('Failed to send message');
     }
     return response.json();
@@ -90,6 +264,7 @@ export const api = {
 
   /**
    * Send a message and receive streaming updates.
+   * Requires authentication and ownership of the conversation.
    * @param {string} conversationId - The conversation ID
    * @param {string} content - The message content
    * @param {function} onEvent - Callback function for each event: (eventType, data) => void
@@ -108,12 +283,20 @@ export const api = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...getAuthHeader(),
         },
         body: JSON.stringify(body),
       }
     );
 
     if (!response.ok) {
+      if (response.status === 401) {
+        clearToken();
+        throw new Error('Not authenticated');
+      }
+      if (response.status === 404) {
+        throw new Error('Conversation not found');
+      }
       throw new Error('Failed to send message');
     }
 
@@ -143,14 +326,27 @@ export const api = {
 
   /**
    * Export a conversation as Markdown.
+   * Requires authentication and ownership of the conversation.
    * @param {string} conversationId - The conversation ID
    * @returns {Promise<void>} - Triggers file download
    */
   async exportMarkdown(conversationId) {
     const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/export/markdown`
+      `${API_BASE}/api/conversations/${conversationId}/export/markdown`,
+      {
+        headers: {
+          ...getAuthHeader(),
+        },
+      }
     );
     if (!response.ok) {
+      if (response.status === 401) {
+        clearToken();
+        throw new Error('Not authenticated');
+      }
+      if (response.status === 404) {
+        throw new Error('Conversation not found');
+      }
       throw new Error('Failed to export conversation');
     }
 
@@ -176,14 +372,27 @@ export const api = {
 
   /**
    * Export a conversation as PDF.
+   * Requires authentication and ownership of the conversation.
    * @param {string} conversationId - The conversation ID
    * @returns {Promise<void>} - Triggers file download
    */
   async exportPDF(conversationId) {
     const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/export/pdf`
+      `${API_BASE}/api/conversations/${conversationId}/export/pdf`,
+      {
+        headers: {
+          ...getAuthHeader(),
+        },
+      }
     );
     if (!response.ok) {
+      if (response.status === 401) {
+        clearToken();
+        throw new Error('Not authenticated');
+      }
+      if (response.status === 404) {
+        throw new Error('Conversation not found');
+      }
       if (response.status === 501) {
         throw new Error('PDF export is not available. The server needs additional packages installed.');
       }

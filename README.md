@@ -35,17 +35,63 @@ npm install
 cd ..
 ```
 
-### 2. Configure API Key
+### 2. Configure Environment
 
-Create a `.env` file in the project root:
+Copy the example environment file and customize it:
 
 ```bash
-OPENROUTER_API_KEY=sk-or-v1-...
+cp .env.example .env
 ```
 
-Get your API key at [openrouter.ai](https://openrouter.ai/). Make sure to purchase the credits you need, or sign up for automatic top up.
+**Required settings:**
 
-### 3. Configure Models (Optional)
+```bash
+# LLM API Configuration (choose one)
+# Option A: LiteLLM local proxy (default)
+LLM_API_URL=http://localhost:4000/chat/completions
+LLM_API_KEY=sk-litellm-master-key
+
+# Option B: OpenRouter
+# LLM_API_URL=https://openrouter.ai/api/v1/chat/completions
+# OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+Get your OpenRouter API key at [openrouter.ai](https://openrouter.ai/).
+
+### 3. Configure Authentication
+
+The application requires user authentication to protect your LLM API credits and conversation data.
+
+**Required for production:**
+
+```bash
+# Generate a secure secret key
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+# Add to your .env file
+AUTH_SECRET_KEY=your-generated-secret-key-here
+```
+
+**Optional settings:**
+
+```bash
+# Token expiration time in minutes (default: 60)
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+```
+
+> ⚠️ **Security Warning:** If `AUTH_SECRET_KEY` is not set, the application will auto-generate a random key on startup. This is **insecure for production** because:
+> - Tokens will be invalidated on every server restart
+> - Users will need to log in again after each restart
+> - The key may not be cryptographically strong enough
+
+**Authentication features:**
+- User registration and login with email/password
+- JWT token-based authentication
+- All conversation endpoints are protected
+- Users can only access their own conversations (IDOR protection)
+- API credit-consuming endpoints require authentication
+
+### 4. Configure Models (Optional)
 
 Edit `backend/config.py` to customize the ministry:
 

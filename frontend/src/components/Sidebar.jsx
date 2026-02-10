@@ -9,6 +9,8 @@ export default function Sidebar({
   onSelectConversation,
   onNewConversation,
   onMinistryConfigChange,
+  user,
+  onLogout,
 }) {
   const [exporting, setExporting] = useState(null);
 
@@ -97,6 +99,19 @@ export default function Sidebar({
           )}
         </div>
       </div>
+
+      {user && (
+        <div className="user-section">
+          <div className="user-info">
+            <div className="user-email" title={user.email}>
+              {user.email}
+            </div>
+          </div>
+          <button className="logout-btn" onClick={onLogout}>
+            Logout
+          </button>
+        </div>
+      )}
     </div>
   );
 }
