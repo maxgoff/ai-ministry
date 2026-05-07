@@ -9,12 +9,22 @@ env/
 .venv/
 ENV/
 
-# Environment
+# Environment - exclude all .env variants, keep the example template
 .env
+.env-*
+.env.*
+!.env.example
 
-# Data (conversations are local)
+# Data (all runtime state is local; never committed)
 data/conversations/*.json
+data/conversations/*.db
 data/conversations/ministry.db
+data/model_registry*.json
+data/*.db
+data/*.sqlite*
+
+# Letta agent runtime
+.letta/
 
 # Node
 node_modules/
@@ -47,3 +57,9 @@ htmlcov/
 
 # LiteLLM
 .litellm/
+
+# Auto Claude data directory
+.auto-claude/
+
+# AI Ministry runtime
+.ai-ministry.pids
