@@ -2,7 +2,7 @@
  * API client for the AI Ministry backend.
  */
 
-const API_BASE = 'http://localhost:8001';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 const TOKEN_KEY = 'ai_ministry_auth_token';
 
 /**
@@ -140,6 +140,45 @@ export const api = {
     const response = await fetch(`${API_BASE}/api/config`);
     if (!response.ok) {
       throw new Error('Failed to get config');
+    }
+    return response.json();
+  },
+
+  /**
+   * Trigger a model discovery refresh.
+   * Scans each provider for current-generation models, evicts superseded
+   * ones, smoke-tests new entries, and returns a diff describing what
+   * changed. Requires authentication.
+   */
+  async refreshModels() {
+    const response = await fetch(`${API_BASE}/api/models/refresh`, {
+      method: 'POST',
+      headers: { ...getAuthHeader() },
+    });
+    if (!response.ok) {
+      if (response.status === 401) {
+        clearToken();
+        throw new Error('Not authenticated');
+      }
+      throw new Error('Failed to refresh models');
+    }
+    return response.json();
+  },
+
+  /**
+   * Get the current persisted model registry (diagnostic).
+   * Requires authentication.
+   */
+  async getModelRegistry() {
+    const response = await fetch(`${API_BASE}/api/models/registry`, {
+      headers: { ...getAuthHeader() },
+    });
+    if (!response.ok) {
+      if (response.status === 401) {
+        clearToken();
+        throw new Error('Not authenticated');
+      }
+      throw new Error('Failed to get model registry');
     }
     return response.json();
   },
@@ -376,6 +415,95 @@ export const api = {
    * @param {string} conversationId - The conversation ID
    * @returns {Promise<void>} - Triggers file download
    */
+  // ============================================
+  // Trading Advisory API
+  // ============================================
+
+  async getTradingTemplates() {
+    const response = await fetch(`${API_BASE}/api/trading/templates`);
+    if (!response.ok) throw new Error('Failed to get trading templates');
+    return response.json();
+  },
+
+  async getTradingSettings() {
+    const response = await fetch(`${API_BASE}/api/trading/settings`, {
+      headers: { ...getAuthHeader() },
+    });
+    if (!response.ok) {
+      if (response.status === 401) { clearToken(); throw new Error('Not authenticated'); }
+      throw new Error('Failed to get trading settings');
+    }
+    return response.json();
+  },
+
+  async saveTradingSettings(settings) {
+    const response = await fetch(`${API_BASE}/api/trading/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify(settings),
+    });
+    if (!response.ok) {
+      if (response.status === 401) { clearToken(); throw new Error('Not authenticated'); }
+      throw new Error('Failed to save trading settings');
+    }
+    return response.json();
+  },
+
+  async listTradingSessions() {
+    const response = await fetch(`${API_BASE}/api/trading/sessions`, {
+      headers: { ...getAuthHeader() },
+    });
+    if (!response.ok) {
+      if (response.status === 401) { clearToken(); throw new Error('Not authenticated'); }
+      throw new Error('Failed to list trading sessions');
+    }
+    return response.json();
+  },
+
+  async getTradingSession(sessionId) {
+    const response = await fetch(`${API_BASE}/api/trading/sessions/${sessionId}`, {
+      headers: { ...getAuthHeader() },
+    });
+    if (!response.ok) {
+      if (response.status === 401) { clearToken(); throw new Error('Not authenticated'); }
+      if (response.status === 404) throw new Error('Trading session not found');
+      throw new Error('Failed to get trading session');
+    }
+    return response.json();
+  },
+
+  async runTradingSession(sessionRequest, onEvent) {
+    const response = await fetch(`${API_BASE}/api/trading/sessions/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify(sessionRequest),
+    });
+    if (!response.ok) {
+      if (response.status === 401) { clearToken(); throw new Error('Not authenticated'); }
+      throw new Error('Failed to start trading session');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value);
+      const lines = chunk.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const event = JSON.parse(line.slice(6));
+            onEvent(event.type, event);
+          } catch (e) {
+            console.error('Failed to parse SSE event:', e);
+          }
+        }
+      }
+    }
+  },
+
   async exportPDF(conversationId) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/export/pdf`,

@@ -63,3 +63,7 @@ htmlcov/
 
 # AI Ministry runtime
 .ai-ministry.pids
+.ai-ministry.ports
+
+# Git worktrees used for parallel feature branches — contain full repo copies
+.worktrees/
