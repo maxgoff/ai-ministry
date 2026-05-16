@@ -6,7 +6,7 @@
 # API Configuration
 # =============================================================================
 api:
-  url: http://localhost:4000/chat/completions
+  url: https://openrouter.ai/api/v1/chat/completions
   # The API key is loaded from the LLM_API_KEY environment variable
 
 # =============================================================================
@@ -14,21 +14,24 @@ api:
 # =============================================================================
 # List all models available for selection in the UI
 available_models:
-  - openai/gpt-4.1
-  - openai/gpt-4o
-  - openai/gpt-4o-mini
-  - google/gemini-3-pro
-  - google/gemini-2.5-pro
-  - google/gemini-2.5-flash
+  - openai/gpt-5.2
+  - openai/gpt-5-mini
   - anthropic/claude-opus-4.6
-  - anthropic/claude-sonnet-4.5
-  - moonshot/kimi-k2-thinking
-  - nvidia/llama-3.3-70b
-  - nvidia/kimi-k2-instruct
-  - nvidia/kimi-k2-thinking
-  - nvidia/kimi-k2.5
-  - x-ai/grok-4.1
-  - x-ai/grok-3
+  - anthropic/claude-sonnet-4.6
+  - anthropic/claude-haiku-4.5
+  - google/gemini-3.1-pro-preview
+  - google/gemini-3-pro-preview
+  - google/gemini-3-flash-preview
+  - google/gemini-3.1-flash-lite-preview
+  - moonshotai/kimi-k2.5
+  - meta-llama/llama-4-maverick
+  - deepseek/deepseek-v3.2
+  - xai/grok-4.20-0309-reasoning
+  - xai/grok-4.20-0309-non-reasoning
+  - xai/grok-4-1-fast-reasoning
+  - xai/grok-4-1-fast-non-reasoning
+  - xai/grok-3
+  - xai/grok-3-mini
 
 # =============================================================================
 # Ministry Members
@@ -36,32 +39,102 @@ available_models:
 # Define which models participate in the 3-stage deliberation process
 # Each member can optionally have a persona to guide their thinking style
 ministry_members:
-  - id: openai/gpt-4.1
+  - id: openai/gpt-5.2
     persona: analytical_strategist
-  - id: google/gemini-3-pro
+  - id: google/gemini-3.1-pro-preview
     persona: systems_thinker
-  - id: anthropic/claude-opus-4.5
+  - id: anthropic/claude-opus-4.6
     persona: principled_reasoner
-  - id: moonshot/kimi-k2-thinking
+  - id: moonshotai/kimi-k2.5
     persona: deep_analyst
-  - id: x-ai/grok-4.1
+  - id: xai/grok-4-1-fast-reasoning
     persona: unconventional_thinker
 
 # =============================================================================
 # Prime Minister
 # =============================================================================
 # The model responsible for synthesizing all responses into the final answer
-prime_minister: google/gemini-3-pro
+prime_minister: google/gemini-3.1-pro-preview
+
+# =============================================================================
+# Model Discovery & Refresh
+# =============================================================================
+# Boot-time + on-demand REFRESH scans each provider for current-generation
+# models. Within each (provider, family) group, only the max major version
+# is kept; older majors are evicted. New entries are silently smoke-tested
+# before joining the registry. Default ministry members and PM auto-promote
+# to successors when their model is evicted.
+#
+# Set boot_refresh: off to disable; sync to block startup until done; async
+# (default) to run in the background while the previous registry is served.
+discovery:
+  enabled: true
+  boot_refresh: async
+  providers:
+    openai:
+      enabled: true
+      api_key_env: OPENAI_API_KEY
+      base_url: https://api.openai.com/v1
+    anthropic:
+      enabled: true
+      api_key_env: ANTHROPIC_API_KEY
+      base_url: https://api.anthropic.com/v1
+    google:
+      enabled: true
+      api_key_env: GOOGLE_API_KEY
+      base_url: https://generativelanguage.googleapis.com/v1beta
+    xai:
+      enabled: true
+      api_key_env: XAI_API_KEY
+      base_url: https://api.x.ai/v1
+    moonshot:
+      enabled: true
+      api_key_env: MOONSHOT_API_KEY
+      base_url: https://api.moonshot.ai/v1
+    nvidia:
+      enabled: true
+      api_key_env: NVIDIA_API_KEY
+      base_url: https://integrate.api.nvidia.com/v1
+    openrouter:
+      enabled: true
+      api_key_env: LLM_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      role: enrichment
+  smoke_test:
+    timeout_seconds: 10
+    reasoning_timeout_seconds: 60
+
+# Models listed here are always retained across refreshes — useful for pinning
+# legacy or experimental models that the auto-eviction would otherwise drop.
+available_models_overrides: []
 
 # =============================================================================
 # Researcher (Stage 0 - Web Search Grounding)
 # =============================================================================
-# Uses Grok via xAI Responses API to search the web before deliberation.
-# Requires XAI_API_KEY to be set in .env. Gracefully skipped if not available.
+# Grounds the council in current, verified web facts BEFORE Stage 1.
+# Flow per user query:
+#   1. intent_classifier decides if research is actually needed
+#   2. if yes, primary path (xAI Responses + grok web_search) runs
+#   3. on failure or missing XAI_API_KEY, falls back to DuckDuckGo + LLM synthesis
+# Council models receive the briefing as context — they do not search themselves.
 researcher:
   enabled: true
   model: grok-4-1-fast
   timeout: 120
+
+  # Fallback: DuckDuckGo (no API key, no signup) + LLM synthesis.
+  # Used when xAI fails or XAI_API_KEY is unset. synthesis_model turns the
+  # raw search snippets into the same KEY FACTS / RESEARCH SUMMARY shape.
+  fallback:
+    enabled: true
+    synthesis_model: google/gemini-2.5-flash
+
+  # Intent classifier: a fast LLM gates Stage 0. Skips research entirely for
+  # queries that don't depend on current/live information (math, reasoning,
+  # coding, opinion, planning, etc.) to save latency and API spend.
+  intent_classifier:
+    enabled: true
+    model: google/gemini-2.5-flash
 
 # =============================================================================
 # Personas

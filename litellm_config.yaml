@@ -10,85 +10,84 @@
 
 model_list:
   # OpenAI Models
-  - model_name: openai/gpt-4.1
+  - model_name: openai/gpt-5.2
     litellm_params:
-      model: gpt-4.1
+      model: gpt-5.2
       api_key: os.environ/OPENAI_API_KEY
+      timeout: 300  # Reasoning model needs extended timeout
 
-  - model_name: openai/gpt-4o
+  - model_name: openai/gpt-5.2-instant
     litellm_params:
-      model: gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-
-  - model_name: openai/gpt-4o-mini
-    litellm_params:
-      model: gpt-4o-mini
+      model: gpt-5.2-chat-latest
       api_key: os.environ/OPENAI_API_KEY
 
   # Anthropic Models
-  - model_name: anthropic/claude-sonnet-4.5
+  - model_name: anthropic/claude-opus-4.6
     litellm_params:
-      model: anthropic/claude-sonnet-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY
-      max_tokens: 8192
-
-  - model_name: anthropic/claude-sonnet-4
-    litellm_params:
-      model: anthropic/claude-sonnet-4-20250514
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-  - model_name: anthropic/claude-3.5-sonnet
-    litellm_params:
-      model: anthropic/claude-3-5-sonnet-20241022
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-  - model_name: anthropic/claude-opus-4
-    litellm_params:
-      model: anthropic/claude-opus-4-20250514
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-  - model_name: anthropic/claude-opus-4.5
-    litellm_params:
-      model: anthropic/claude-opus-4-5
+      model: anthropic/claude-opus-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
       max_tokens: 16384
 
+  - model_name: anthropic/claude-sonnet-4.6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+      max_tokens: 8192
+
+  - model_name: anthropic/claude-haiku-4.5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+
   # Google Models
+  - model_name: google/gemini-3.1-pro
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GOOGLE_API_KEY
+
   - model_name: google/gemini-3-pro
     litellm_params:
       model: gemini/gemini-3-pro-preview
       api_key: os.environ/GOOGLE_API_KEY
 
-  - model_name: google/gemini-2.5-pro
+  - model_name: google/gemini-3-flash
     litellm_params:
-      model: gemini/gemini-2.5-pro
-      api_key: os.environ/GOOGLE_API_KEY
-
-  - model_name: google/gemini-2.5-flash
-    litellm_params:
-      model: gemini/gemini-2.5-flash
+      model: gemini/gemini-3-flash-preview
       api_key: os.environ/GOOGLE_API_KEY
 
   # Moonshot/Kimi Models
   # Uses OpenAI-compatible API at api.moonshot.ai
-  # Note: Kimi K2 Thinking is a reasoning model that needs extended timeout
-  - model_name: moonshot/kimi-k2-thinking
+  # K2.5 supports thinking/instant modes via API parameters
+  - model_name: moonshot/kimi-k2.5
     litellm_params:
-      model: openai/kimi-k2-thinking
+      model: openai/kimi-k2.5
       api_key: os.environ/MOONSHOT_API_KEY
       api_base: https://api.moonshot.ai/v1
-      timeout: 300  # Extended timeout for reasoning model (5 minutes)
+      timeout: 300  # Reasoning model needs extended timeout
 
-  # xAI Models
-  - model_name: x-ai/grok-4.1
+  # NVIDIA NIM Models
+  # Uses OpenAI-compatible API at integrate.api.nvidia.com
+  - model_name: nvidia/llama-4-maverick
     litellm_params:
-      model: xai/grok-4-0709
-      api_key: os.environ/XAI_API_KEY
+      model: openai/meta/llama-4-maverick-17b-128e-instruct
+      api_key: os.environ/NVIDIA_API_KEY
+      api_base: https://integrate.api.nvidia.com/v1
+      max_tokens: 1024
 
-  - model_name: x-ai/grok-2
+  - model_name: nvidia/deepseek-v3.2
     litellm_params:
-      model: xai/grok-2-latest
-      api_key: os.environ/XAI_API_KEY
+      model: openai/deepseek-ai/deepseek-v3.2
+      api_key: os.environ/NVIDIA_API_KEY
+      api_base: https://integrate.api.nvidia.com/v1
+      timeout: 300  # Reasoning model needs extended timeout
+      max_tokens: 1024
+
+  - model_name: nvidia/qwen-3.5
+    litellm_params:
+      model: openai/qwen/qwen3-next-80b-a3b-instruct
+      api_key: os.environ/NVIDIA_API_KEY
+      api_base: https://integrate.api.nvidia.com/v1
+      max_tokens: 1024
 
 litellm_settings:
   # Drop unmapped params to avoid errors with provider-specific params

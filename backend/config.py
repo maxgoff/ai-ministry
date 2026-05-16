@@ -103,8 +103,10 @@ LLM_API_URL = os.getenv(
 )
 LLM_API_KEY = _require_env_var("LLM_API_KEY", "API key for LLM service")
 
-# Legacy OpenRouter support (fallback if LLM_API_KEY not set)
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or LLM_API_KEY
+# The actual key used for all LLM calls.
+# LLM_API_KEY is the canonical source. Only fall back to OPENROUTER_API_KEY
+# from env if LLM_API_KEY somehow wasn't set (legacy setups).
+OPENROUTER_API_KEY = LLM_API_KEY
 OPENROUTER_API_URL = LLM_API_URL
 
 # Hardcoded defaults (used if YAML not present)
@@ -125,8 +127,12 @@ _DEFAULT_AVAILABLE_MODELS = [
     "nvidia/kimi-k2-instruct",
     "nvidia/kimi-k2-thinking",
     "nvidia/kimi-k2.5",
-    "x-ai/grok-4.1",
-    "x-ai/grok-3",
+    "xai/grok-4.20-0309-reasoning",
+    "xai/grok-4.20-0309-non-reasoning",
+    "xai/grok-4-1-fast-reasoning",
+    "xai/grok-4-1-fast-non-reasoning",
+    "xai/grok-3",
+    "xai/grok-3-mini",
 ]
 
 _DEFAULT_MINISTRY_MODELS = [
@@ -134,7 +140,7 @@ _DEFAULT_MINISTRY_MODELS = [
     "google/gemini-3-pro",
     "anthropic/claude-opus-4.6",
     "moonshot/kimi-k2-thinking",
-    "x-ai/grok-4.1",
+    "xai/grok-4-1-fast-reasoning",
 ]
 
 _DEFAULT_PERSONAS = {
@@ -173,7 +179,7 @@ _DEFAULT_MODEL_PERSONA_MAP = {
     "google/gemini-3-pro": "systems_thinker",
     "anthropic/claude-opus-4.6": "principled_reasoner",
     "moonshot/kimi-k2-thinking": "deep_analyst",
-    "x-ai/grok-4.1": "unconventional_thinker",
+    "xai/grok-4-1-fast-reasoning": "unconventional_thinker",
 }
 
 # Load from YAML or use defaults
@@ -214,11 +220,48 @@ CHAIRMAN_MODEL = DEFAULT_PRIME_MINISTER
 # Researcher Configuration (Stage 0 - Web Search Grounding)
 # =============================================================================
 XAI_API_KEY = os.getenv("XAI_API_KEY")
+XAI_API_URL = "https://api.x.ai/v1/chat/completions"
 
 _researcher_config = _yaml_config.get("researcher", {})
 RESEARCHER_ENABLED = _researcher_config.get("enabled", True)
 RESEARCHER_MODEL = _researcher_config.get("model", "grok-4-1-fast")
 RESEARCHER_TIMEOUT = _researcher_config.get("timeout", 120)
+
+# Fallback: DuckDuckGo (no API key) + LLM synthesis if xAI fails or no key set.
+_fallback_config = _researcher_config.get("fallback", {})
+RESEARCHER_FALLBACK_ENABLED = _fallback_config.get("enabled", True)
+RESEARCHER_FALLBACK_MODEL = _fallback_config.get("synthesis_model", "google/gemini-2.5-flash")
+
+# Intent classifier: a fast model decides if a query actually needs current
+# web facts before we spend latency on Stage 0.
+_intent_config = _researcher_config.get("intent_classifier", {})
+RESEARCH_INTENT_ENABLED = _intent_config.get("enabled", True)
+RESEARCH_INTENT_MODEL = _intent_config.get("model", "google/gemini-2.5-flash")
+
+# =============================================================================
+# Model Discovery Configuration
+# =============================================================================
+# Controls the boot-time + on-demand REFRESH that scans providers for new models
+# and evicts superseded ones. See backend/model_refresh.py for the cycle and
+# backend/model_registry.py for the policy.
+_DEFAULT_DISCOVERY_CONFIG = {
+    "enabled": True,
+    "boot_refresh": "async",  # "sync" | "async" | "off"
+    "providers": {
+        "openai":     {"enabled": True, "api_key_env": "OPENAI_API_KEY",    "base_url": "https://api.openai.com/v1"},
+        "anthropic":  {"enabled": True, "api_key_env": "ANTHROPIC_API_KEY", "base_url": "https://api.anthropic.com/v1"},
+        "google":     {"enabled": True, "api_key_env": "GOOGLE_API_KEY",    "base_url": "https://generativelanguage.googleapis.com/v1beta"},
+        "xai":        {"enabled": True, "api_key_env": "XAI_API_KEY",       "base_url": "https://api.x.ai/v1"},
+        "moonshot":   {"enabled": True, "api_key_env": "MOONSHOT_API_KEY",  "base_url": "https://api.moonshot.ai/v1"},
+        "nvidia":     {"enabled": True, "api_key_env": "NVIDIA_API_KEY",    "base_url": "https://integrate.api.nvidia.com/v1"},
+        "openrouter": {"enabled": True, "api_key_env": "LLM_API_KEY",       "base_url": "https://openrouter.ai/api/v1", "role": "enrichment"},
+    },
+    "smoke_test": {
+        "timeout_seconds": 10,
+        "reasoning_timeout_seconds": 60,
+    },
+}
+DISCOVERY_CONFIG: Dict[str, Any] = _yaml_config.get("discovery", _DEFAULT_DISCOVERY_CONFIG)
 
 # Data directory for conversation storage
 DATA_DIR = "data/conversations"

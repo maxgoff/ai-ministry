@@ -12,20 +12,62 @@ from datetime import datetime
 
 from . import storage
 from .council import run_full_council, generate_conversation_title, stage0_research, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
-from .config import AVAILABLE_MODELS, AVAILABLE_PERSONAS, DEFAULT_MINISTRY_MODELS, DEFAULT_PRIME_MINISTER, DEFAULT_MODEL_PERSONAS
+from . import config as cfg
+from .config import AVAILABLE_MODELS, AVAILABLE_PERSONAS, DEFAULT_MINISTRY_MODELS, DEFAULT_PRIME_MINISTER, DEFAULT_MODEL_PERSONAS, DISCOVERY_CONFIG, RESEARCH_INTENT_ENABLED, RESEARCH_INTENT_MODEL
+from .research_intent import should_research
 from .openrouter import query_model
 from .auth import get_password_hash, verify_password, create_access_token, get_current_user
+from . import trading_storage
+from .trading_templates import get_templates_metadata
+from .trading_council import run_trading_session
+from .model_refresh import (
+    run_refresh,
+    effective_available_models,
+    effective_defaults,
+    get_active_registry,
+)
+from .model_registry import load_registry
 
 app = FastAPI(title="AI Ministry API")
 
-# Enable CORS for local development
+# Enable CORS for local development. The frontend port is chosen dynamically
+# by start.sh (to dodge conflicts), so accept any localhost/127.0.0.1 port.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def _boot_discovery():
+    """
+    Always run discovery in the background — startup must never block on
+    network I/O (start.sh times out at 30s, and a fresh discovery cycle
+    can take longer).
+
+    When no registry exists yet, /api/config falls back to YAML defaults
+    until the async refresh completes.
+
+    Set ministry_config.yaml -> discovery.boot_refresh: off to skip entirely.
+    """
+    mode = DISCOVERY_CONFIG.get("boot_refresh", "async")
+    if mode == "off" or not DISCOVERY_CONFIG.get("enabled", True):
+        print("[Boot] discovery refresh skipped (config)")
+        return
+
+    print("[Boot] firing async discovery refresh (registry served from YAML defaults until done)")
+    asyncio.create_task(_safe_refresh())
+
+
+async def _safe_refresh():
+    try:
+        diff = await run_refresh()
+        print(f"[Refresh] +{len(diff.added)} -{len(diff.removed)} succession={diff.succession} smoke_failures={len(diff.smoke_failures)}")
+    except Exception as e:
+        print(f"[Refresh] background refresh failed: {e}")
 
 
 class CreateConversationRequest(BaseModel):
@@ -205,20 +247,74 @@ async def get_config():
     """
     Get available models, personas, and default configuration.
 
-    This is a public endpoint that does not require authentication.
-    Returns the configuration needed for the frontend to display
-    available options before user authentication.
+    Reads from the live model registry (data/model_registry.json) when
+    present so newly discovered models appear without a restart and evicted
+    defaults are auto-promoted to their successors. Falls back to YAML
+    defaults when no registry exists yet (e.g. first boot before discovery
+    finishes).
 
     Returns:
         dict: Configuration containing available_models, available_personas,
               default_ministry_models, default_prime_minister, and default_model_personas
     """
+    available = effective_available_models()
+    ministry, personas, pm = effective_defaults()
+    registry = get_active_registry()
     return {
-        "available_models": AVAILABLE_MODELS,
+        "available_models": available,
         "available_personas": AVAILABLE_PERSONAS,
-        "default_ministry_models": DEFAULT_MINISTRY_MODELS,
-        "default_prime_minister": DEFAULT_PRIME_MINISTER,
-        "default_model_personas": DEFAULT_MODEL_PERSONAS,
+        "default_ministry_models": ministry,
+        "default_prime_minister": pm,
+        "default_model_personas": personas,
+        "registry_generated_at": registry.generated_at if registry else None,
+    }
+
+
+@app.post("/api/models/refresh")
+async def refresh_models(current_user: dict = Depends(get_current_user)):
+    """
+    Trigger an on-demand model discovery + refresh cycle.
+
+    Discovers each provider's current catalog, applies the current-generation
+    policy, smoke-tests new entries, and writes the resulting registry to
+    disk. Default ministry members and PM that get evicted are auto-promoted
+    to their successors.
+
+    Returns the diff so the UI can show what changed.
+    """
+    diff = await run_refresh()
+    return diff.to_dict()
+
+
+@app.get("/api/models/registry")
+async def get_models_registry(current_user: dict = Depends(get_current_user)):
+    """Return the current persisted registry contents (diagnostic UI)."""
+    registry = get_active_registry()
+    if registry is None:
+        return {"generated_at": None, "models": [], "evicted": [], "succession": {}, "smoke_failures": []}
+    return {
+        "generated_at": registry.generated_at,
+        "models": [
+            {
+                "id": m.id,
+                "provider": m.provider,
+                "family": m.family,
+                "tier": m.tier,
+                "version": m.version,
+                "source": m.source,
+                "pricing_completion": m.pricing_completion,
+                "context_length": m.context_length,
+                "smoke_tested_at": m.smoke_tested_at,
+                "pinned": m.pinned,
+            }
+            for m in registry.models
+        ],
+        "evicted": [
+            {"id": e.id, "reason": e.reason, "superseded_by": e.superseded_by}
+            for e in registry.evicted
+        ],
+        "succession": registry.succession,
+        "smoke_failures": registry.smoke_failures,
     }
 
 
@@ -233,17 +329,24 @@ async def check_models_health(current_user: dict = Depends(get_current_user)):
     Raises:
         HTTPException 401: If not authenticated or token is invalid
     """
+    # Reasoning models need longer timeouts for health checks
+    REASONING_MODELS = {
+        "openai/gpt-5.2", "moonshot/kimi-k2.5", "nvidia/deepseek-v3.2",
+        "xai/grok-4.20-0309-reasoning", "xai/grok-4-1-fast-reasoning",
+    }
+
     async def check_model(model: str) -> dict:
         """Check if a single model is healthy."""
         try:
+            timeout = 60.0 if model in REASONING_MODELS else 15.0
             response = await query_model(
                 model,
                 [{"role": "user", "content": "Say OK"}],
-                timeout=15.0
+                timeout=timeout
             )
             return {
                 "model": model,
-                "healthy": response is not None and response.get('content'),
+                "healthy": response is not None and bool(response.get('content')),
                 "error": None
             }
         except Exception as e:
@@ -253,8 +356,10 @@ async def check_models_health(current_user: dict = Depends(get_current_user)):
                 "error": str(e)
             }
 
-    # Check all models in parallel
-    tasks = [check_model(model) for model in AVAILABLE_MODELS]
+    # Check all models in parallel — use live registry so newly discovered
+    # models are reflected without a restart.
+    models_to_check = effective_available_models()
+    tasks = [check_model(model) for model in models_to_check]
     results = await asyncio.gather(*tasks)
 
     return {
@@ -445,10 +550,21 @@ async def send_message_stream(
             if is_first_message:
                 title_task = asyncio.create_task(generate_conversation_title(request.content))
 
-            # Stage 0: Research
-            yield f"data: {json.dumps({'type': 'stage0_start'})}\n\n"
-            research_briefing = await stage0_research(request.content)
-            yield f"data: {json.dumps({'type': 'stage0_complete', 'data': research_briefing})}\n\n"
+            # Decide if Stage 0 research is needed for this query.
+            # Intent classifier runs a fast LLM call and returns
+            # {needs_research, reason}. Defaults to True on classifier failure.
+            research_briefing = None
+            needs_research, intent_reason = True, "Intent classifier disabled"
+            if RESEARCH_INTENT_ENABLED:
+                needs_research, intent_reason = await should_research(
+                    request.content, model=RESEARCH_INTENT_MODEL
+                )
+            yield f"data: {json.dumps({'type': 'research_decision', 'data': {'needed': needs_research, 'reason': intent_reason}})}\n\n"
+
+            if needs_research:
+                yield f"data: {json.dumps({'type': 'stage0_start'})}\n\n"
+                research_briefing = await stage0_research(request.content)
+                yield f"data: {json.dumps({'type': 'stage0_complete', 'data': research_briefing})}\n\n"
 
             # Stage 1: Collect responses
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
@@ -868,6 +984,118 @@ async def export_conversation_pdf(
             status_code=501,
             detail="PDF export requires 'fpdf2' package. Install with: pip install fpdf2"
         )
+
+
+# ============================================
+# Trading Advisory Models
+# ============================================
+
+class TradingSettingsRequest(BaseModel):
+    """Global trading settings."""
+    watchlist: Optional[str] = None
+    account_size: Optional[str] = None
+    open_positions: Optional[str] = None
+    risk_tolerance: Optional[str] = None
+    risk_per_trade: Optional[str] = None
+    trading_style: Optional[str] = None
+    markets: Optional[str] = None
+
+
+class TradingSessionRequest(BaseModel):
+    """Request to create and run a trading session."""
+    selected_traders: List[str]
+    trader_fields: Dict[str, Dict[str, str]] = {}
+    global_settings: Dict[str, Any] = {}
+    ministry_config: Optional[MinistryConfig] = None
+
+
+# ============================================
+# Trading Advisory Endpoints
+# ============================================
+
+@app.get("/api/trading/templates")
+async def get_trading_templates():
+    """Get trader metadata and field definitions (public, no auth required)."""
+    return get_templates_metadata()
+
+
+@app.get("/api/trading/settings")
+async def get_trading_settings(current_user: dict = Depends(get_current_user)):
+    """Get the current user's saved global trading settings."""
+    user_id = current_user.get("sub")
+    return trading_storage.get_trading_settings(user_id)
+
+
+@app.put("/api/trading/settings")
+async def save_trading_settings(
+    request: TradingSettingsRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Save the current user's global trading settings."""
+    user_id = current_user.get("sub")
+    settings = {k: v for k, v in request.model_dump().items() if v is not None}
+    trading_storage.save_trading_settings(user_id, settings)
+    return {"status": "ok"}
+
+
+@app.get("/api/trading/sessions")
+async def list_trading_sessions(current_user: dict = Depends(get_current_user)):
+    """List all trading sessions for the current user."""
+    user_id = current_user.get("sub")
+    return trading_storage.list_trading_sessions(user_id)
+
+
+@app.get("/api/trading/sessions/{session_id}")
+async def get_trading_session(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Get a full trading session with all analyses and master synthesis."""
+    user_id = current_user.get("sub")
+    session = trading_storage.get_trading_session(session_id, user_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Trading session not found")
+    return session
+
+
+@app.post("/api/trading/sessions/stream")
+async def stream_trading_session(
+    request: TradingSessionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Create and run a trading session with SSE streaming.
+
+    Runs each selected trader through the full 4-stage ministry pipeline,
+    then auto-synthesizes via the master trader if 2+ traders selected.
+    """
+    user_id = current_user.get("sub")
+
+    # Extract ministry config
+    ministry_models = None
+    model_personas = None
+    prime_minister = None
+    if request.ministry_config:
+        ministry_models = request.ministry_config.ministry_models
+        model_personas = request.ministry_config.model_personas
+        prime_minister = request.ministry_config.prime_minister
+
+    return StreamingResponse(
+        run_trading_session(
+            user_id=user_id,
+            selected_traders=request.selected_traders,
+            trader_fields=request.trader_fields,
+            global_settings=request.global_settings,
+            ministry_models=ministry_models,
+            model_personas=model_personas,
+            prime_minister=prime_minister,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 if __name__ == "__main__":
