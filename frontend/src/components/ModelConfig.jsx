@@ -7,6 +7,9 @@ export default function ModelConfig({ onConfigChange }) {
   const [config, setConfig] = useState(null);
   const [modelsHealth, setModelsHealth] = useState(null);
   const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshDiff, setRefreshDiff] = useState(null);
+  const [refreshError, setRefreshError] = useState(null);
 
   // Selected models and their personas
   const [selectedModels, setSelectedModels] = useState([]);
@@ -53,6 +56,29 @@ export default function ModelConfig({ onConfigChange }) {
       console.error('Failed to check models health:', error);
     }
     setIsCheckingHealth(false);
+  };
+
+  const refreshModels = async () => {
+    setIsRefreshing(true);
+    setRefreshError(null);
+    setRefreshDiff(null);
+    try {
+      const diff = await api.refreshModels();
+      setRefreshDiff(diff);
+      // Reload config so the new available_models / defaults flow into UI
+      await loadConfig();
+      // Health snapshot is now stale
+      setModelsHealth(null);
+    } catch (error) {
+      setRefreshError(error.message || 'Refresh failed');
+      console.error('Failed to refresh models:', error);
+    }
+    setIsRefreshing(false);
+  };
+
+  const dismissRefreshDiff = () => {
+    setRefreshDiff(null);
+    setRefreshError(null);
   };
 
   const toggleModel = (model) => {
@@ -117,9 +143,17 @@ export default function ModelConfig({ onConfigChange }) {
             <button
               className="refresh-health-btn"
               onClick={checkHealth}
-              disabled={isCheckingHealth}
+              disabled={isCheckingHealth || isRefreshing}
             >
               {isCheckingHealth ? 'Checking...' : 'Check Health'}
+            </button>
+            <button
+              className="refresh-models-btn"
+              onClick={refreshModels}
+              disabled={isRefreshing || isCheckingHealth}
+              title="Scan all providers for new models; evict superseded ones"
+            >
+              {isRefreshing ? 'Refreshing...' : 'Refresh Models'}
             </button>
             {modelsHealth && (
               <span className="health-summary">
@@ -127,6 +161,82 @@ export default function ModelConfig({ onConfigChange }) {
               </span>
             )}
           </div>
+
+          {refreshError && (
+            <div className="refresh-diff refresh-diff-error">
+              <div className="refresh-diff-header">
+                <strong>Refresh failed</strong>
+                <button className="diff-dismiss" onClick={dismissRefreshDiff}>×</button>
+              </div>
+              <div className="refresh-diff-body">{refreshError}</div>
+            </div>
+          )}
+
+          {refreshDiff && (
+            <div className="refresh-diff">
+              <div className="refresh-diff-header">
+                <strong>Refresh complete</strong>
+                <span className="refresh-diff-time">
+                  {refreshDiff.generated_at
+                    ? new Date(refreshDiff.generated_at).toLocaleString()
+                    : ''}
+                </span>
+                <button className="diff-dismiss" onClick={dismissRefreshDiff}>×</button>
+              </div>
+              <div className="refresh-diff-body">
+                {refreshDiff.added && refreshDiff.added.length > 0 && (
+                  <div className="diff-section diff-added">
+                    <div className="diff-label">＋ Added ({refreshDiff.added.length})</div>
+                    <ul>
+                      {refreshDiff.added.map((id) => (
+                        <li key={id}>{id}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {refreshDiff.removed && refreshDiff.removed.length > 0 && (
+                  <div className="diff-section diff-removed">
+                    <div className="diff-label">－ Removed ({refreshDiff.removed.length})</div>
+                    <ul>
+                      {refreshDiff.removed.map((e) => (
+                        <li key={e.id}>
+                          <code>{e.id}</code> — {e.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {refreshDiff.succession && Object.keys(refreshDiff.succession).length > 0 && (
+                  <div className="diff-section diff-succession">
+                    <div className="diff-label">↻ Defaults updated</div>
+                    <ul>
+                      {Object.entries(refreshDiff.succession).map(([oldId, newId]) => (
+                        <li key={oldId}>
+                          <code>{oldId}</code> → <code>{newId}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {refreshDiff.smoke_failures && Object.keys(refreshDiff.smoke_failures).length > 0 && (
+                  <div className="diff-section diff-failures">
+                    <div className="diff-label">⚠ Smoke-test failures ({Object.keys(refreshDiff.smoke_failures).length})</div>
+                    <ul>
+                      {Object.entries(refreshDiff.smoke_failures).map(([id, err]) => (
+                        <li key={id}>
+                          <code>{id}</code> — {err}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {(!refreshDiff.added || refreshDiff.added.length === 0) &&
+                 (!refreshDiff.removed || refreshDiff.removed.length === 0) && (
+                  <div className="diff-section">No changes — registry already current.</div>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="models-list">
             {config.available_models.map((model) => {

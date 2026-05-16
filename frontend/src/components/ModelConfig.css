@@ -182,3 +182,111 @@
   outline: none;
   border-color: #4a90e2;
 }
+
+/* === REFRESH MODELS button + diff panel === */
+.refresh-models-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  background: #eef4ff;
+  color: #1a4a8a;
+  border: 1px solid #c8d8f0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.refresh-models-btn:hover:not(:disabled) {
+  background: #dde9fc;
+}
+
+.refresh-models-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.refresh-diff {
+  margin: 8px 0 12px;
+  border: 1px solid #d0e0d0;
+  border-radius: 6px;
+  background: #f7fcf7;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.refresh-diff-error {
+  border-color: #f0c8c8;
+  background: #fdf3f3;
+}
+
+.refresh-diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.03);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  gap: 8px;
+}
+
+.refresh-diff-time {
+  font-size: 11px;
+  color: #888;
+  margin-left: auto;
+}
+
+.diff-dismiss {
+  background: none;
+  border: none;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  color: #666;
+  padding: 0 4px;
+}
+
+.diff-dismiss:hover {
+  color: #000;
+}
+
+.refresh-diff-body {
+  padding: 8px 12px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.diff-section {
+  margin-bottom: 8px;
+}
+
+.diff-section:last-child {
+  margin-bottom: 0;
+}
+
+.diff-label {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.diff-added .diff-label  { color: #2a7a2a; }
+.diff-removed .diff-label { color: #a04040; }
+.diff-succession .diff-label { color: #1a4a8a; }
+.diff-failures .diff-label { color: #b06000; }
+
+.refresh-diff-body ul {
+  margin: 0 0 0 16px;
+  padding: 0;
+}
+
+.refresh-diff-body li {
+  margin-bottom: 2px;
+  word-break: break-all;
+}
+
+.refresh-diff-body code {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
