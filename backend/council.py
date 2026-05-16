@@ -7,6 +7,7 @@ from .config import (
     COUNCIL_MODELS, CHAIRMAN_MODEL, MODEL_PERSONAS, AVAILABLE_PERSONAS,
     DEFAULT_MODEL_PERSONAS, XAI_API_KEY, RESEARCHER_ENABLED,
     RESEARCHER_MODEL, RESEARCHER_TIMEOUT,
+    RESEARCHER_FALLBACK_ENABLED, RESEARCHER_FALLBACK_MODEL,
 )
 from .researcher import run_research
 
@@ -15,14 +16,16 @@ async def stage0_research(user_query: str) -> Optional[Dict[str, Any]]:
     """
     Stage 0: Run web research to ground the ministry in current facts.
 
-    Returns a briefing dict or None if research is unavailable/disabled/failed.
+    Tries xAI first, falls back to DuckDuckGo + LLM synthesis (no API key
+    required) if xAI fails or XAI_API_KEY is unset. Returns the briefing
+    dict, or None if research is disabled / both paths fail.
     """
     if not RESEARCHER_ENABLED:
         print("[Stage 0] Researcher disabled in config.")
         return None
 
-    if not XAI_API_KEY:
-        print("[Stage 0] XAI_API_KEY not set — skipping research.")
+    if not XAI_API_KEY and not RESEARCHER_FALLBACK_ENABLED:
+        print("[Stage 0] No XAI_API_KEY and fallback disabled — skipping research.")
         return None
 
     try:
@@ -31,11 +34,15 @@ async def stage0_research(user_query: str) -> Optional[Dict[str, Any]]:
             api_key=XAI_API_KEY,
             timeout=float(RESEARCHER_TIMEOUT),
             model=RESEARCHER_MODEL,
+            fallback_enabled=RESEARCHER_FALLBACK_ENABLED,
+            fallback_model=RESEARCHER_FALLBACK_MODEL,
         )
         if briefing:
-            print(f"[Stage 0] Research complete: {len(briefing.get('citations', []))} citations")
+            source = briefing.get('model', 'unknown')
+            n_cites = len(briefing.get('citations', []))
+            print(f"[Stage 0] Research complete via {source}: {n_cites} citations")
         else:
-            print("[Stage 0] Research returned empty result.")
+            print("[Stage 0] Research returned empty result from all sources.")
         return briefing
     except Exception as e:
         print(f"[Stage 0] Research failed: {e}")

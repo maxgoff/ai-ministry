@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from .openrouter import query_model
+
 # Retry configuration (mirrors openrouter.py pattern)
 MAX_RETRIES = 3
 BASE_DELAY = 1.0
@@ -18,6 +20,7 @@ MAX_DELAY = 30.0
 RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 XAI_RESPONSES_URL = "https://api.x.ai/v1/responses"
+DEFAULT_FALLBACK_MODEL = "google/gemini-2.5-flash"
 
 
 def _is_retryable_error(error: Exception) -> bool:
@@ -181,18 +184,13 @@ def _format_briefing(
     }
 
 
-async def run_research(
+async def _try_xai(
     user_query: str,
     api_key: str,
-    timeout: float = 120.0,
-    model: str = "grok-4-1-fast",
+    timeout: float,
+    model: str,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Public entry point: run web research and return a structured briefing.
-
-    Returns a briefing dict or None on failure.
-    Implements exponential backoff retry logic.
-    """
+    """Run xAI Responses with retries. Returns briefing or None on failure."""
     user_content = _build_researcher_prompt(user_query)
     last_error = None
 
@@ -203,20 +201,155 @@ async def run_research(
             )
             parsed = _parse_xai_response(raw)
             briefing = _format_briefing(parsed, user_query, model)
-            return briefing
+            if briefing:
+                return briefing
+            return None  # empty payload — let caller fall back
 
         except Exception as e:
             last_error = e
-
             if attempt < MAX_RETRIES and _is_retryable_error(e):
                 delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
                 print(
-                    f"[Researcher] Attempt {attempt + 1}/{MAX_RETRIES + 1} failed: {e}. "
+                    f"[Researcher] xAI attempt {attempt + 1}/{MAX_RETRIES + 1} failed: {e}. "
                     f"Retrying in {delay:.1f}s..."
                 )
                 await asyncio.sleep(delay)
             else:
                 break
 
-    print(f"[Researcher] Failed after {MAX_RETRIES + 1} attempts: {last_error}")
+    print(f"[Researcher] xAI failed after {MAX_RETRIES + 1} attempts: {last_error}")
+    return None
+
+
+# =============================================================================
+# Fallback path: DuckDuckGo search + LLM synthesis (no API key required)
+# =============================================================================
+
+_DDG_SYNTHESIS_PROMPT = """You are a research assistant. The user asked the question below, and a web search returned the snippets below. Produce a briefing in EXACTLY the format specified — nothing else.
+
+Today's date is {today}.
+
+Question: {query}
+
+Search results:
+{results_block}
+
+Produce your response with these two markdown headers and nothing else:
+
+## KEY FACTS
+- 3 to 8 bullet points of verified facts derived from the snippets above
+- Include source URLs in parentheses when available
+- Include specific numbers, names, and dates when available
+
+## RESEARCH SUMMARY
+2 to 4 paragraphs synthesizing what the search results say about the question. If the results are sparse, contradictory, or unclear, say so plainly."""
+
+
+async def _ddg_search(query: str, max_results: int = 10) -> List[Dict[str, str]]:
+    """Run a DuckDuckGo text search via the ddgs library. No API key needed."""
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        print("[Researcher] ddgs not installed; skipping DDG fallback")
+        return []
+
+    def _search():
+        with DDGS() as d:
+            return list(d.text(query, max_results=max_results))
+
+    try:
+        return await asyncio.to_thread(_search)
+    except Exception as e:
+        print(f"[Researcher] DDG search failed: {e}")
+        return []
+
+
+def _format_ddg_results(results: List[Dict[str, str]]) -> str:
+    """Format raw DDG results into a numbered context block for the synthesizer."""
+    if not results:
+        return "(no search results)"
+    lines = []
+    for i, r in enumerate(results, 1):
+        title = (r.get("title") or "").strip()
+        url = r.get("href") or r.get("url") or ""
+        body = (r.get("body") or "").strip()
+        lines.append(f"[{i}] {title}\n    URL: {url}\n    {body}")
+    return "\n\n".join(lines)
+
+
+async def _try_ddg(
+    user_query: str,
+    synthesis_model: str,
+    timeout: float,
+    max_results: int = 10,
+) -> Optional[Dict[str, Any]]:
+    """
+    Fallback path: DDG search + LLM synthesis into the standard briefing shape.
+    Returns None if the search returns nothing or synthesis fails.
+    """
+    results = await _ddg_search(user_query, max_results=max_results)
+    if not results:
+        return None
+
+    today = date.today().strftime("%B %d, %Y")
+    synthesis_prompt = _DDG_SYNTHESIS_PROMPT.format(
+        today=today,
+        query=user_query,
+        results_block=_format_ddg_results(results),
+    )
+
+    response = await query_model(
+        synthesis_model,
+        [{"role": "user", "content": synthesis_prompt}],
+        timeout=timeout,
+        max_retries=2,
+    )
+
+    if not response or not response.get("content"):
+        print("[Researcher] DDG synthesis returned no content")
+        return None
+
+    parsed = {
+        "text": response["content"],
+        "citations": [
+            {"url": (r.get("href") or r.get("url") or ""), "title": (r.get("title") or "")}
+            for r in results
+            if r.get("href") or r.get("url")
+        ],
+        "search_queries": [user_query],
+    }
+
+    return _format_briefing(parsed, user_query, model=f"ddg+{synthesis_model}")
+
+
+# =============================================================================
+# Public entry point
+# =============================================================================
+
+
+async def run_research(
+    user_query: str,
+    api_key: Optional[str],
+    timeout: float = 120.0,
+    model: str = "grok-4-1-fast",
+    fallback_enabled: bool = True,
+    fallback_model: str = DEFAULT_FALLBACK_MODEL,
+) -> Optional[Dict[str, Any]]:
+    """
+    Public entry point: run web research and return a structured briefing.
+
+    Tries xAI Responses API first (if api_key is set), then falls back to
+    DuckDuckGo + LLM synthesis. Returns None only if both paths fail.
+    """
+    if api_key:
+        briefing = await _try_xai(user_query, api_key, timeout, model)
+        if briefing:
+            return briefing
+    else:
+        print("[Researcher] No XAI_API_KEY — skipping xAI, going straight to fallback")
+
+    if fallback_enabled:
+        print(f"[Researcher] Falling back to DuckDuckGo + {fallback_model}")
+        return await _try_ddg(user_query, synthesis_model=fallback_model, timeout=timeout)
+
     return None
