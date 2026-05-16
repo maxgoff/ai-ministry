@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import AuthForm from './components/AuthForm';
+import NavBar from './components/NavBar';
+import TradingPage from './components/TradingPage';
 import { api } from './api';
 import './App.css';
 
@@ -9,6 +11,9 @@ function App() {
   // Authentication state
   const [user, setUser] = useState(null);
   const [authChecking, setAuthChecking] = useState(true);
+
+  // Navigation
+  const [currentPage, setCurrentPage] = useState('ministry');
 
   // App state
   const [conversations, setConversations] = useState([]);
@@ -280,20 +285,29 @@ function App() {
   // Show main app when authenticated
   return (
     <div className="app">
-      <Sidebar
-        conversations={conversations}
-        currentConversationId={currentConversationId}
-        onSelectConversation={handleSelectConversation}
-        onNewConversation={handleNewConversation}
-        onMinistryConfigChange={handleMinistryConfigChange}
-        user={user}
-        onLogout={handleLogout}
-      />
-      <ChatInterface
-        conversation={currentConversation}
-        onSendMessage={handleSendMessage}
-        isLoading={isLoading}
-      />
+      <NavBar currentPage={currentPage} onPageChange={setCurrentPage} />
+      <div className="app-content">
+        {currentPage === 'ministry' ? (
+          <>
+            <Sidebar
+              conversations={conversations}
+              currentConversationId={currentConversationId}
+              onSelectConversation={handleSelectConversation}
+              onNewConversation={handleNewConversation}
+              onMinistryConfigChange={handleMinistryConfigChange}
+              user={user}
+              onLogout={handleLogout}
+            />
+            <ChatInterface
+              conversation={currentConversation}
+              onSendMessage={handleSendMessage}
+              isLoading={isLoading}
+            />
+          </>
+        ) : (
+          <TradingPage user={user} onLogout={handleLogout} />
+        )}
+      </div>
     </div>
   );
 }

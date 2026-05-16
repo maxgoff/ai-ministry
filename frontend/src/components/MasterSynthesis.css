@@ -1,0 +1,23 @@
+.master-synthesis {
+  border-left: 4px solid #d69e2e;
+  background: #fffdf5;
+  border-radius: 8px;
+  margin-bottom: 24px;
+  padding: 20px;
+  box-shadow: 0 1px 4px rgba(214, 158, 46, 0.12);
+}
+
+.master-synthesis-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f0e6c8;
+}
+
+.master-synthesis-header h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #8b6914;
+  margin: 0;
+}

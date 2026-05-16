@@ -1,0 +1,30 @@
+.navbar {
+  display: flex;
+  height: 44px;
+  background: #f8f8f8;
+  border-bottom: 1px solid #e0e0e0;
+  padding: 0 16px;
+  flex-shrink: 0;
+}
+
+.nav-tab {
+  padding: 0 20px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #666;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.nav-tab:hover {
+  color: #333;
+}
+
+.nav-tab.active {
+  border-bottom: 2px solid #4a90e2;
+  color: #4a90e2;
+  font-weight: 600;
+}

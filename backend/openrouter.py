@@ -3,7 +3,7 @@
 import asyncio
 import httpx
 from typing import List, Dict, Any, Optional
-from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL
+from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL, XAI_API_KEY, XAI_API_URL
 
 # Retry configuration
 MAX_RETRIES = 3
@@ -43,13 +43,23 @@ async def query_model(
     Returns:
         Response dict with 'content' and optional 'reasoning_details', or None if failed
     """
+    # Route xai/ prefixed models directly to x.ai API
+    if model.startswith("xai/"):
+        api_url = XAI_API_URL
+        api_key = XAI_API_KEY
+        api_model = model[len("xai/"):]  # Strip prefix for native model name
+    else:
+        api_url = OPENROUTER_API_URL
+        api_key = OPENROUTER_API_KEY
+        api_model = model
+
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
     payload = {
-        "model": model,
+        "model": api_model,
         "messages": messages,
     }
 
@@ -59,7 +69,7 @@ async def query_model(
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
-                    OPENROUTER_API_URL,
+                    api_url,
                     headers=headers,
                     json=payload
                 )
