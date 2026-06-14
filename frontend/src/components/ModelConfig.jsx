@@ -252,7 +252,6 @@ export default function ModelConfig({ onConfigChange }) {
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => toggleModel(model)}
-                        disabled={isHealthy === false}
                       />
                       <span className={`model-name ${isHealthy === false ? 'unhealthy' : ''}`}>
                         {getModelDisplayName(model)}

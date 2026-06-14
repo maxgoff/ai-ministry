@@ -238,11 +238,12 @@ fi
 
 echo -e "${BLUE}Starting backend...${NC}"
 
-# Try uvicorn directly first, fall back to uv run
-if command -v uvicorn &> /dev/null; then
-    python -m uvicorn backend.main:app --host 0.0.0.0 --port $BACKEND_PORT > /tmp/backend.log 2>&1 &
-elif command -v uv &> /dev/null; then
-    uv run python -m uvicorn backend.main:app --host 0.0.0.0 --port $BACKEND_PORT > /tmp/backend.log 2>&1 &
+# Prefer `uv run` since this project is uv-managed — guards against a stale
+# VIRTUAL_ENV from another project pointing `python`/`uvicorn` at the wrong env.
+if command -v uv &> /dev/null; then
+    uv run --project "$SCRIPT_DIR" python -m uvicorn backend.main:app --host 0.0.0.0 --port $BACKEND_PORT > /tmp/backend.log 2>&1 &
+elif command -v uvicorn &> /dev/null; then
+    uvicorn backend.main:app --host 0.0.0.0 --port $BACKEND_PORT > /tmp/backend.log 2>&1 &
 else
     python -m uvicorn backend.main:app --host 0.0.0.0 --port $BACKEND_PORT > /tmp/backend.log 2>&1 &
 fi
