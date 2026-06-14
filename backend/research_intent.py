@@ -7,7 +7,7 @@ don't silently deliver stale info on time-sensitive questions.
 
 import json
 import re
-from typing import Tuple
+from typing import Set, Tuple
 
 from .openrouter import query_model
 
@@ -87,3 +87,61 @@ async def should_research(
     except Exception as e:
         print(f"[ResearchIntent] Classifier failed: {e} — defaulting to research")
         return True, f"Classifier error ({type(e).__name__}); defaulting to research"
+
+
+# =============================================================================
+# Grounding skill selection (Stage 0 toolbelt)
+# =============================================================================
+# Generalizes should_research from a yes/no gate into selecting *which*
+# classifier-gated grounding skills a query needs. url_reader is deterministic
+# (URL detection) and is NOT selected here — see backend/grounding.py.
+
+_VALID_GROUNDING_SKILLS = {"web_search", "code_exec"}
+
+_GROUNDING_CLASSIFIER_PROMPT = """You are a fast tool-selection classifier for a research stage. Decide which grounding tools (if any) the query needs before expert analysis.
+
+Available tools:
+- "web_search": query needs current/live web information (news, recent events, prices, latest releases, regulations, anyone/anything whose status may have changed, or anything where stale knowledge could mislead).
+- "code_exec": query needs precise COMPUTATION or data processing to answer accurately (non-trivial arithmetic, math, combinatorics, simulations, date math, statistics over given numbers).
+
+Select NEITHER for self-contained reasoning, opinion, planning, creative, or stable general-knowledge questions, and for coding *advice* (writing/explaining code is not the same as needing to RUN code to get an answer).
+
+A query may need both tools, one, or none.
+
+Query:
+{query}
+
+Respond in JSON only — no prose, no markdown fences:
+{{"skills": [<zero or more of "web_search","code_exec">], "reason": "one short sentence"}}"""
+
+
+async def classify_grounding(
+    user_query: str,
+    model: str = DEFAULT_CLASSIFIER_MODEL,
+    timeout: float = 30.0,
+) -> Tuple[Set[str], str]:
+    """Select the classifier-gated grounding skills a query needs.
+
+    Returns (skills, reason) where skills is a subset of {"web_search",
+    "code_exec"}. Defaults to {"web_search"} on any failure — stale info is
+    worse than a few extra seconds of latency.
+    """
+    messages = [
+        {"role": "user", "content": _GROUNDING_CLASSIFIER_PROMPT.format(query=user_query)}
+    ]
+
+    try:
+        result = await query_model(model, messages, timeout=timeout, max_retries=1)
+        if not result or not result.get("content"):
+            return {"web_search"}, "Classifier returned empty response (defaulting to web_search)"
+
+        parsed = _extract_json(result["content"])
+        skills = {s for s in parsed.get("skills", []) if s in _VALID_GROUNDING_SKILLS}
+        reason = (str(parsed.get("reason", "")).strip()
+                  or (f"Selected: {', '.join(sorted(skills))}" if skills
+                      else "No grounding tools needed"))
+        return skills, reason
+
+    except Exception as e:
+        print(f"[GroundingIntent] Classifier failed: {e} — defaulting to web_search")
+        return {"web_search"}, f"Classifier error ({type(e).__name__}); defaulting to web_search"

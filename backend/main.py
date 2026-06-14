@@ -15,6 +15,7 @@ from .council import run_full_council, generate_conversation_title, stage0_resea
 from . import config as cfg
 from .config import AVAILABLE_MODELS, AVAILABLE_PERSONAS, DEFAULT_MINISTRY_MODELS, DEFAULT_PRIME_MINISTER, DEFAULT_MODEL_PERSONAS, DISCOVERY_CONFIG, RESEARCH_INTENT_ENABLED, RESEARCH_INTENT_MODEL
 from .research_intent import should_research
+from . import grounding
 from .openrouter import query_model
 from .auth import get_password_hash, verify_password, create_access_token, get_current_user
 from . import trading_storage
@@ -331,7 +332,9 @@ async def check_models_health(current_user: dict = Depends(get_current_user)):
     """
     # Reasoning models need longer timeouts for health checks
     REASONING_MODELS = {
-        "openai/gpt-5.2", "moonshot/kimi-k2.5", "nvidia/deepseek-v3.2",
+        "openai/gpt-5.2", "openai/gpt-5.5",
+        "google/gemma-4-31b", "google/gemma-4-26b-moe",
+        "moonshot/kimi-k2.5", "nvidia/deepseek-v3.2",
         "xai/grok-4.20-0309-reasoning", "xai/grok-4-1-fast-reasoning",
     }
 
@@ -550,20 +553,17 @@ async def send_message_stream(
             if is_first_message:
                 title_task = asyncio.create_task(generate_conversation_title(request.content))
 
-            # Decide if Stage 0 research is needed for this query.
-            # Intent classifier runs a fast LLM call and returns
-            # {needs_research, reason}. Defaults to True on classifier failure.
+            # Stage 0: decide which grounding skills (web_search / url_reader /
+            # code_exec) this query needs, then run them and merge into one
+            # briefing. The decision is emitted before any skill runs so the UI
+            # can show what's happening. Defaults toward grounding on failure.
             research_briefing = None
-            needs_research, intent_reason = True, "Intent classifier disabled"
-            if RESEARCH_INTENT_ENABLED:
-                needs_research, intent_reason = await should_research(
-                    request.content, model=RESEARCH_INTENT_MODEL
-                )
-            yield f"data: {json.dumps({'type': 'research_decision', 'data': {'needed': needs_research, 'reason': intent_reason}})}\n\n"
+            decision = await grounding.decide(request.content)
+            yield f"data: {json.dumps({'type': 'research_decision', 'data': {'needed': decision.needed, 'reason': decision.reason, 'skills': decision.skills}})}\n\n"
 
-            if needs_research:
-                yield f"data: {json.dumps({'type': 'stage0_start'})}\n\n"
-                research_briefing = await stage0_research(request.content)
+            if decision.needed:
+                yield f"data: {json.dumps({'type': 'stage0_start', 'data': {'skills': decision.skills}})}\n\n"
+                research_briefing = await grounding.run(request.content, decision)
                 yield f"data: {json.dumps({'type': 'stage0_complete', 'data': research_briefing})}\n\n"
 
             # Stage 1: Collect responses

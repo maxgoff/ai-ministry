@@ -210,3 +210,69 @@ All 4 issues from Restart-2 fixed plus a date-suffix bug surfaced during live ve
 - `tests/test_config.py::TestLLMApiKeyValidation` has 2 pre-existing failures (verified by stashing my changes). Out of scope.
 - `openai/gpt-5.4-mini` and `…-mini-2026-03-17` both kept — date-suffix dedupe within survivor groups not yet implemented (out of scope; would extend `_VARIANT_SUFFIXES` semantics).
 - `moonshot/` vs `moonshotai/` (same model, two providers) both kept — cross-provider dedupe out of scope.
+
+---
+
+# 2026-06-05 — Model Refresh + Skill-Augmented Grounding (Option B)
+
+Plan: `~/.claude/plans/optimized-leaping-sparkle.md`. Council routes **direct to OpenRouter**
+(`LLM_API_URL=https://openrouter.ai/api/v1/chat/completions`), so new slugs need no LiteLLM routes.
+
+## Phase 1 — New models (config-only)
+- [x] Pre-flight: smoke-tested the 6 slugs via `query_model` — 5/6 OK; nano-omni slug 404'd
+- [x] `ministry_config.yaml`: added 6 to `available_models`, removed `deepseek/deepseek-v3.2`
+- [x] `ministry_config.yaml`: pinned **all six** in `available_models_overrides` (plan said only nemotron+glm; refresh step 2a drops OpenRouter-only models, and deepseek/z-ai aren't direct providers → all six need pinning)
+- [x] `ministry_config.yaml`: seated `nvidia/nemotron-3-ultra-550b-a55b` as 6th member (pragmatic_implementer)
+- [x] `backend/model_refresh.py`: extended `_REASONING_HINTS` (deepseek-v4, nemotron, glm-5)
+- [x] Verify: `run_refresh()` → 6 added, v3.2 evicted, none in smoke_failures
+- [x] Verify: live `GET /api/config` → new catalog + 6 members incl. Nemotron; frontend up
+
+## Phase 2 — Option B: pluggable grounding
+- [x] `backend/skills/base.py` — `GroundingSkill` ABC
+- [x] `backend/skills/web_search.py` — adapter over `researcher.run_research` (no rewrite)
+- [x] `backend/skills/url_reader.py` — deterministic URL fetch + HTML→text extract
+- [x] `backend/skills/code_exec.py` — sandboxed LLM-authored Python (subprocess, rlimits, timeout)
+- [x] `backend/grounding.py` — registry + `decide`/`run`/`ground_query` + `_merge`
+- [x] `backend/research_intent.py` — added `classify_grounding` (skill selection); kept `should_research`
+- [x] `ministry_config.yaml` + `backend/config.py` — `grounding_stage` block (+ legacy back-compat)
+- [x] `backend/council.py` — `stage0_research` delegates to grounding orchestrator
+- [x] `backend/main.py` — stream gate uses `grounding.decide/run`, emits `research_decision{skills}`
+- [x] Verify: 24/24 unit checks + 9/9 live SSE integration checks
+
+## Review (this feature)
+
+### Outcome
+Both phases shipped and verified end-to-end against the running app.
+
+**Phase 1 — models.** Added Nemotron 3 Ultra/Super/Nano, DeepSeek V4 Pro/Flash, GLM 5.1 to the
+catalog; retired DeepSeek v3.2; seated Nemotron 3 Ultra as the council's first open-weights voice
+(6th member). All six route via OpenRouter (no NVIDIA key, sidestepping the Nemotron 403). Pinned
+all six in overrides — the plan under-scoped this (only nemotron+glm); reading run_refresh step 2a
+showed deepseek/z-ai aren't direct-discovery providers, so all six are OpenRouter-only and get
+dropped unless pinned. Substituted `nemotron-3-nano-30b-a3b` for the requested `…-nano-omni-…`
+variant: the omni slug 404s on OpenRouter's chat-completions path, and the council is text-only so
+the multimodal capability would go unused.
+
+**Phase 2 — skill-augmented grounding.** Generalized the single Stage-0 researcher into a pluggable
+`GroundingSkill` registry (`web_search` migrated as a thin adapter, new `url_reader`, new sandboxed
+`code_exec`). The intent classifier now selects *which* skills run. Skills run in parallel and
+`_merge` combines them into one briefing; a single fragment passes through unchanged → exact parity
+for the common web-search-only case, so Stages 1-3 and the frontend needed **zero** changes.
+
+### Verification
+- Pre-flight smoke test of all slugs (gate before editing config).
+- `run_refresh()` diff + live `/api/config` assertions (Phase 1).
+- 24/24 grounding unit checks: imports, code_exec static-safety, `_merge` parity/dedup, url_reader
+  fetch, sandbox kills infinite loop, classifier routing (web/code/none), `decide()` routing,
+  `ground_query` end-to-end (computed Fibonacci(30)=832040).
+- 9/9 live SSE integration: a new model (deepseek-v4-flash) deliberated through Stages 1-3 with a
+  code_exec-grounded briefing; all events fired once, no errors.
+
+### Notes / follow-ups (out of scope)
+- code_exec is NOT a true sandbox (LLM-authored code; subprocess+rlimits+timeout only). Disable via
+  `grounding_stage.skills.code_exec.enabled: false` if the residual risk matters.
+- The boot refresh surfaced even newer auto-discovered models (`claude-opus-4-8`, `kimi-k2.6`,
+  `gpt-5.5-pro`); some seated members (opus-4.6, kimi-k2.5, grok-4-1-fast) didn't auto-succeed to
+  them — a pre-existing succession edge case (see Restart-2/3 notes above), not touched here.
+- Frontend could optionally surface `research_decision.skills` / a "skills used" chip; deferred (v1
+  keeps FE unchanged).

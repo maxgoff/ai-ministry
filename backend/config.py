@@ -213,6 +213,14 @@ COUNCIL_MODELS = DEFAULT_MINISTRY_MODELS
 # Prime Minister model - synthesizes final response
 DEFAULT_PRIME_MINISTER = _yaml_config.get("prime_minister", "google/gemini-3-pro")
 
+# Non-Anthropic synthesizer used when the Prime Minister refuses or returns nothing.
+# Fable 5 runs cyber/bio/reasoning-extraction safety classifiers (which Opus and the
+# other members don't) and can return stop_reason: "refusal". Falling back keeps a
+# successful 6-way deliberation from failing at the final synthesis step. Kept
+# non-Anthropic on purpose so the retry isn't behind the same classifiers.
+# See backend/council.py::stage3_synthesize_final.
+DEFAULT_PRIME_MINISTER_FALLBACK = _yaml_config.get("prime_minister_fallback", "openai/gpt-5.5")
+
 # Legacy alias for backward compatibility
 CHAIRMAN_MODEL = DEFAULT_PRIME_MINISTER
 
@@ -237,6 +245,36 @@ RESEARCHER_FALLBACK_MODEL = _fallback_config.get("synthesis_model", "google/gemi
 _intent_config = _researcher_config.get("intent_classifier", {})
 RESEARCH_INTENT_ENABLED = _intent_config.get("enabled", True)
 RESEARCH_INTENT_MODEL = _intent_config.get("model", "google/gemini-2.5-flash")
+
+# =============================================================================
+# Grounding Stage (Stage 0) — pluggable skills toolbelt
+# =============================================================================
+# Generalizes the single researcher into a registry of grounding skills
+# (web_search, url_reader, code_exec); see backend/grounding.py + backend/skills/.
+# Back-compat: if `grounding_stage` is absent from YAML, synthesize a one-skill
+# (web_search) config from the legacy `researcher:` block so existing setups
+# keep working unchanged.
+_grounding_yaml = _yaml_config.get("grounding_stage")
+if _grounding_yaml is None:
+    GROUNDING_CONFIG = {
+        "enabled": RESEARCHER_ENABLED,
+        "intent_classifier": {
+            "enabled": RESEARCH_INTENT_ENABLED,
+            "model": RESEARCH_INTENT_MODEL,
+        },
+        "skills": {
+            "web_search": {
+                "enabled": True,
+                "model": RESEARCHER_MODEL,
+                "timeout": RESEARCHER_TIMEOUT,
+                "fallback_enabled": RESEARCHER_FALLBACK_ENABLED,
+                "fallback_model": RESEARCHER_FALLBACK_MODEL,
+            },
+        },
+        "merge": {"strategy": "concat"},
+    }
+else:
+    GROUNDING_CONFIG = _grounding_yaml
 
 # =============================================================================
 # Model Discovery Configuration

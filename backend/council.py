@@ -5,47 +5,31 @@ from typing import List, Dict, Any, Tuple, Optional
 from .openrouter import query_models_parallel, query_model
 from .config import (
     COUNCIL_MODELS, CHAIRMAN_MODEL, MODEL_PERSONAS, AVAILABLE_PERSONAS,
-    DEFAULT_MODEL_PERSONAS, XAI_API_KEY, RESEARCHER_ENABLED,
-    RESEARCHER_MODEL, RESEARCHER_TIMEOUT,
-    RESEARCHER_FALLBACK_ENABLED, RESEARCHER_FALLBACK_MODEL,
+    DEFAULT_MODEL_PERSONAS, DEFAULT_PRIME_MINISTER_FALLBACK,
 )
-from .researcher import run_research
+from .grounding import ground_query
 
 
 async def stage0_research(user_query: str) -> Optional[Dict[str, Any]]:
     """
-    Stage 0: Run web research to ground the ministry in current facts.
+    Stage 0: ground the council via the pluggable skills toolbelt.
 
-    Tries xAI first, falls back to DuckDuckGo + LLM synthesis (no API key
-    required) if xAI fails or XAI_API_KEY is unset. Returns the briefing
-    dict, or None if research is disabled / both paths fail.
+    Delegates to grounding.ground_query, which classifies the query, runs the
+    applicable grounding skills (web_search / url_reader / code_exec) and merges
+    their outputs into a single briefing. Returns None if no skill applies or
+    grounding is disabled. Kept as a thin wrapper so run_full_council and the
+    non-streaming path retain a stable Stage-0 entry point.
     """
-    if not RESEARCHER_ENABLED:
-        print("[Stage 0] Researcher disabled in config.")
-        return None
-
-    if not XAI_API_KEY and not RESEARCHER_FALLBACK_ENABLED:
-        print("[Stage 0] No XAI_API_KEY and fallback disabled — skipping research.")
-        return None
-
     try:
-        briefing = await run_research(
-            user_query,
-            api_key=XAI_API_KEY,
-            timeout=float(RESEARCHER_TIMEOUT),
-            model=RESEARCHER_MODEL,
-            fallback_enabled=RESEARCHER_FALLBACK_ENABLED,
-            fallback_model=RESEARCHER_FALLBACK_MODEL,
-        )
+        briefing = await ground_query(user_query)
         if briefing:
-            source = briefing.get('model', 'unknown')
-            n_cites = len(briefing.get('citations', []))
-            print(f"[Stage 0] Research complete via {source}: {n_cites} citations")
+            print(f"[Stage 0] Grounding complete via {briefing.get('model', '?')}: "
+                  f"{len(briefing.get('citations', []))} citations")
         else:
-            print("[Stage 0] Research returned empty result from all sources.")
+            print("[Stage 0] No grounding produced (no applicable skills).")
         return briefing
     except Exception as e:
-        print(f"[Stage 0] Research failed: {e}")
+        print(f"[Stage 0] Grounding failed: {e}")
         return None
 
 
@@ -321,19 +305,14 @@ Original Question: {user_query}
 STAGE 2 - Peer Rankings:
 {stage2_text}
 
-Your task as Prime Minister is to synthesize all of this information into a single, comprehensive answer that represents the ministry's collective wisdom.
+Your task as Prime Minister is to synthesize the ministry's responses into a single answer that represents its collective wisdom.
 
-YOUR SYNTHESIS MUST INCLUDE:
-1. **Clear Structure**: Use sections, headers, or bullet points to organize complex topics
-2. **Actionable Insights**: Provide specific, implementable recommendations where applicable
-3. **Trade-off Acknowledgment**: Note key trade-offs or areas where ministry members disagreed
-4. **Unified Conclusion**: End with a clear, definitive recommendation or takeaway
+Lead with the bottom line: open with the single clearest conclusion or recommendation, then support it. Be selective, not exhaustive — include only what changes what the reader would do next. Do not restate each member's response, survey perspectives you won't build on, or pad a simple question into a long answer; match depth and length to what the question actually needs. Write readable prose, not fragments or shorthand.
 
-Consider:
-- The unique perspectives each ministry member brought (analytical, systems, principled, deep analysis)
-- The peer rankings and what they reveal about response quality
-- Patterns of agreement that indicate high-confidence conclusions
-- Areas of disagreement that warrant nuanced discussion
+Ground the synthesis in the material above:
+- Weight responses the peer rankings rated highly, and points where members independently agreed (high-confidence signal).
+- Surface genuine trade-offs or disagreements only where they change the answer.
+- Organize with headers or bullets when the topic is complex enough to warrant it.
 
 Provide your synthesized answer:"""
 
@@ -341,9 +320,23 @@ Provide your synthesized answer:"""
 
     # Query the prime minister model
     response = await query_model(pm_model, messages)
+    content = response.get('content', '').strip() if response else ''
 
-    if response is None:
-        # Fallback if prime minister fails
+    # The PM can refuse (Fable 5 runs cyber/bio/reasoning-extraction classifiers the
+    # other members don't) or return nothing — surfacing here as None or empty content.
+    # Re-synthesize once with the configured non-Anthropic fallback rather than failing
+    # the whole deliberation at the last step.
+    if not content and pm_model != DEFAULT_PRIME_MINISTER_FALLBACK:
+        fb = await query_model(DEFAULT_PRIME_MINISTER_FALLBACK, messages)
+        fb_content = fb.get('content', '').strip() if fb else ''
+        if fb_content:
+            return {
+                "model": DEFAULT_PRIME_MINISTER_FALLBACK,
+                "response": fb_content,
+                "fallback_from": pm_model,
+            }
+
+    if not content:
         return {
             "model": pm_model,
             "response": "Error: Unable to generate final synthesis."
@@ -351,7 +344,7 @@ Provide your synthesized answer:"""
 
     return {
         "model": pm_model,
-        "response": response.get('content', '')
+        "response": content
     }
 
 

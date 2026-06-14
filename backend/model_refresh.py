@@ -38,7 +38,7 @@ from .openrouter import query_model
 
 
 # Reasoning models warrant a longer smoke-test timeout.
-_REASONING_HINTS = ("reasoning", "thinking", "deepseek-v3.2", "kimi-k2.5", "gpt-5.2", "grok-4")
+_REASONING_HINTS = ("reasoning", "thinking", "deepseek-v4", "kimi-k2.5", "gpt-5.2", "grok-4", "nemotron", "glm-5")
 
 # Cap concurrent smoke-test requests to avoid hitting OS file descriptor limits
 # (macOS default ulimit is 256). 16 concurrent httpx clients is comfortably
@@ -157,6 +157,7 @@ async def run_refresh() -> RefreshDiff:
     reasoning_timeout = float(smoke_cfg.get("reasoning_timeout_seconds", 60))
 
     overrides: List[str] = cfg._yaml_config.get("available_models_overrides", []) or []
+    denylist: Set[str] = set(cfg._yaml_config.get("available_models_denylist", []) or [])
 
     # 1. Discover everything in parallel
     discovered = await discover_all(provider_configs)
@@ -170,6 +171,13 @@ async def run_refresh() -> RefreshDiff:
     # already merged in step 2) and drop the rest.
     direct_ids = {d.id for d in deduped if d.source == "direct"}
     deduped = [d for d in deduped if d.source == "direct" or d.id in direct_ids]
+
+    # 2c. Apply user-configured deny-list. Catches IDs that providers expose
+    # but our call path can't route (e.g. NIM lists a model OpenRouter doesn't carry).
+    if denylist:
+        before = len(deduped)
+        deduped = [d for d in deduped if d.id not in denylist]
+        print(f"[Refresh] denylist filtered {before - len(deduped)} models")
 
     # 2b. Drop models we can't classify into a known family. These are mostly
     # provider-hosted third-party models (NVIDIA hosts mistral/llama/etc.,
