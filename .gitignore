@@ -67,3 +67,11 @@ htmlcov/
 
 # Git worktrees used for parallel feature branches — contain full repo copies
 .worktrees/
+
+# Local session/status artifacts — kept on disk, not tracked
+/llm.txt
+/SETUP_COMPLETE.md
+/WORK_SESSION.md
+/UPDATE_MAP.md
+/frontend/IMPLEMENTATION_SUMMARY.md
+/frontend/litellm_config.yaml
