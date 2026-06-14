@@ -75,6 +75,15 @@ prime_minister: anthropic/claude-fable-5
 # synthesis step. Kept non-Anthropic so the retry isn't behind the same classifiers.
 prime_minister_fallback: openai/gpt-5.5
 
+# Tiered Prime Minister (cost control for Fable's token burn).
+# Fable 5 synthesizes by default. When the council STRONGLY agrees in Stage-2 rankings
+# (top-1 agreement >= consensus_threshold), the synthesis is easy, so we downgrade to the
+# cheaper economy model. Contested deliberations (the common case) stay on Fable.
+prime_minister_economy: openai/gpt-5.5
+prime_minister_tiering:
+  enabled: true
+  consensus_threshold: 0.8
+
 # =============================================================================
 # Model Discovery & Refresh
 # =============================================================================

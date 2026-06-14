@@ -6,6 +6,7 @@ from .openrouter import query_models_parallel, query_model
 from .config import (
     COUNCIL_MODELS, CHAIRMAN_MODEL, MODEL_PERSONAS, AVAILABLE_PERSONAS,
     DEFAULT_MODEL_PERSONAS, DEFAULT_PRIME_MINISTER_FALLBACK,
+    DEFAULT_PRIME_MINISTER_ECONOMY, PM_TIERING_ENABLED, PM_CONSENSUS_THRESHOLD,
 )
 from .grounding import ground_query
 
@@ -244,6 +245,39 @@ Now provide your evaluation and ranking:"""
     return stage2_results, label_to_model
 
 
+def _top1_consensus(stage2_results: List[Dict[str, Any]]) -> Optional[float]:
+    """
+    Fraction of rankers whose #1-ranked response is the modal #1 choice.
+
+    1.0 = everyone agreed on the best response; lower = more disagreement.
+    Returns None when fewer than 2 rankings carry a parsed top choice (no signal).
+    """
+    from collections import Counter
+
+    tops = [
+        r["parsed_ranking"][0]
+        for r in (stage2_results or [])
+        if r.get("parsed_ranking")
+    ]
+    if len(tops) < 2:
+        return None
+    modal_count = Counter(tops).most_common(1)[0][1]
+    return modal_count / len(tops)
+
+
+def _select_pm_tier(stage2_results: List[Dict[str, Any]]) -> Tuple[str, str, Optional[float]]:
+    """
+    Pick the synthesizer for an un-pinned PM call: Fable by default, downgraded to
+    the economy model only when the council strongly agrees (easy synthesis).
+
+    Returns (model_id, tier_label, consensus_score).
+    """
+    consensus = _top1_consensus(stage2_results)
+    if PM_TIERING_ENABLED and consensus is not None and consensus >= PM_CONSENSUS_THRESHOLD:
+        return DEFAULT_PRIME_MINISTER_ECONOMY, "economy", consensus
+    return CHAIRMAN_MODEL, "premium", consensus
+
+
 async def stage3_synthesize_final(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
@@ -258,13 +292,18 @@ async def stage3_synthesize_final(
         user_query: The original user query
         stage1_results: Individual model responses from Stage 1
         stage2_results: Rankings from Stage 2
-        prime_minister: Optional model to use for synthesis (defaults to CHAIRMAN_MODEL)
+        prime_minister: Optional model to force for synthesis. When set, tiering is
+            skipped and this model is used verbatim. When None, tiering applies
+            (Fable by default, economy model on strong Stage-2 consensus).
         research_briefing: Optional Stage 0 research briefing
 
     Returns:
-        Dict with 'model' and 'response' keys
+        Dict with 'model', 'response', 'tier', and 'consensus' keys
     """
-    pm_model = prime_minister or CHAIRMAN_MODEL
+    if prime_minister:
+        pm_model, tier, consensus = prime_minister, "forced", None
+    else:
+        pm_model, tier, consensus = _select_pm_tier(stage2_results)
 
     # Build comprehensive context for prime minister
     stage1_text = "\n\n".join([
@@ -334,17 +373,23 @@ Provide your synthesized answer:"""
                 "model": DEFAULT_PRIME_MINISTER_FALLBACK,
                 "response": fb_content,
                 "fallback_from": pm_model,
+                "tier": tier,
+                "consensus": consensus,
             }
 
     if not content:
         return {
             "model": pm_model,
-            "response": "Error: Unable to generate final synthesis."
+            "response": "Error: Unable to generate final synthesis.",
+            "tier": tier,
+            "consensus": consensus,
         }
 
     return {
         "model": pm_model,
-        "response": content
+        "response": content,
+        "tier": tier,
+        "consensus": consensus,
     }
 
 

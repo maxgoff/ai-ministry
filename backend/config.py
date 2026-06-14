@@ -221,6 +221,15 @@ DEFAULT_PRIME_MINISTER = _yaml_config.get("prime_minister", "google/gemini-3-pro
 # See backend/council.py::stage3_synthesize_final.
 DEFAULT_PRIME_MINISTER_FALLBACK = _yaml_config.get("prime_minister_fallback", "openai/gpt-5.5")
 
+# Tiered Prime Minister: Fable 5 is the default synthesizer, but on an easy query
+# (the council strongly agrees in Stage-2 rankings) we downgrade to a cheaper model
+# to curb Fable's token burn. "Strongly agrees" = top-1 ranking agreement at or above
+# the consensus threshold. Disabled -> always use the default PM.
+DEFAULT_PRIME_MINISTER_ECONOMY = _yaml_config.get("prime_minister_economy", "openai/gpt-5.5")
+_pm_tiering = _yaml_config.get("prime_minister_tiering", {}) or {}
+PM_TIERING_ENABLED = bool(_pm_tiering.get("enabled", False))
+PM_CONSENSUS_THRESHOLD = float(_pm_tiering.get("consensus_threshold", 0.8))
+
 # Legacy alias for backward compatibility
 CHAIRMAN_MODEL = DEFAULT_PRIME_MINISTER
 
